@@ -1,0 +1,67 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* ── Fluent backgrounds ── */
+  --bg:     #1a1a2e;
+  --bg2:    #16213e;
+  --bg3:    #0f3460;
+
+  /* ── Fluent surfaces (acrylic) ── */
+  --surface:        rgba(255,255,255,0.04);
+  --surface-hover:  rgba(255,255,255,0.07);
+  --surface-active: rgba(255,255,255,0.10);
+
+  /* ── Fluent strokes ── */
+  --stroke:       rgba(255,255,255,0.07);
+  --stroke-focus: rgba(0,120,212,0.6);
+
+  /* ── Microsoft Blue (primary) ── */
+  --accent:     #0078d4;
+  --accent-hov: #106ebe;
+  --accent-dim: rgba(0,120,212,0.14);
+  --accent-txt: #5ab0f7;
+
+  /* ── Semantic ── */
+  --green:     #54b054;
+  --green-bg:  rgba(16,124,16,0.14);
+  --red:       #f1707b;
+  --red-bg:    rgba(209,52,56,0.14);
+  --gold:      #ffaa44;
+  --gold-bg:   rgba(255,170,68,0.12);
+  --blue:      #5ab0f7;
+
+  /* ── Typography ── */
+  --text:     #ffffff;
+  --text-dim: rgba(255,255,255,0.55);
+  --text-off: rgba(255,255,255,0.35);
+
+  /* ── Fonts ── */
+  --font-hud:  'Orbitron', monospace;
+  --font-data: 'Share Tech Mono', monospace;
+  --font-body: 'Rajdhani', sans-serif;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+input, select, button, textarea { font-family: inherit; }
+
+/* Fluent scrollbar */
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,120,212,0.35); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,120,212,0.55); }
+
+/* Fluent focus ring */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

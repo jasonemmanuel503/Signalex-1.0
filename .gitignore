@@ -1,0 +1,25 @@
+node_modules/
+/.next/
+/out/
+/build
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+logs/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+# V6.5.6: SQLite database — persists on server, not committed to repo
+/data/
+*.db
+*.db-shm
+*.db-wal
+venv/
+.venv/
+env/
+.env.*
+!.env.example
+*.db-journal
