@@ -32,7 +32,7 @@ export async function POST(request) {
       setGlobalRiskMode(body.globalRiskMode);
       return NextResponse.json({ ok: true, global_risk_mode: body.globalRiskMode });
     }
-    const backendUrl = process.env.PYTHON_BACKEND_URL || "http://localhost:8000";
+    const backendUrl = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
     const res = await fetch(`${backendUrl}/prices`, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) return NextResponse.json({ ok: false, error: "Backend unavailable" }, { status: 503 });
     const data    = await res.json();

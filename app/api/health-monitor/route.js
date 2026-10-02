@@ -9,20 +9,33 @@ import { NextResponse } from "next/server";
 // The dashboard polls GET /api/health-monitor every 30s to show status.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PYTHON_BACKEND  = process.env.PYTHON_BACKEND_URL || "http://localhost:8000";
+const PYTHON_BACKEND  = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
 const CHECK_INTERVAL  = 60_000;  // 60 seconds
 const ALERT_COOLDOWN  = 5 * 60_000;  // Don't re-alert for 5 minutes after an alert
 
-// ─── Module-level monitor state ───────────────────────────────────────────────
+// ─── Module-level monitor state (guarded with globalThis) ───────────────────────
 
-let _monitorRunning  = false;
-let _monitorInterval = null;
-let _wasOnline       = null;         // null = unknown, true = online, false = offline
-let _lastAlertAt     = 0;
-let _consecutiveFails = 0;
-let _lastCheckAt     = null;
-let _lastStatus      = "unknown";   // "online" | "offline" | "unknown"
-let _downtimeStart   = null;
+if (!globalThis.__signalex_health_monitor) {
+  globalThis.__signalex_health_monitor = {
+    running: false,
+    interval: null,
+    wasOnline: null,
+    lastAlertAt: 0,
+    consecutiveFails: 0,
+    lastCheckAt: null,
+    lastStatus: "unknown",
+    downtimeStart: null,
+  };
+}
+const _state = globalThis.__signalex_health_monitor;
+let _monitorRunning  = _state.running;
+let _monitorInterval = _state.interval;
+let _wasOnline       = _state.wasOnline;
+let _lastAlertAt     = _state.lastAlertAt;
+let _consecutiveFails = _state.consecutiveFails;
+let _lastCheckAt     = _state.lastCheckAt;
+let _lastStatus      = _state.lastStatus;
+let _downtimeStart   = _state.downtimeStart;
 let _checkCount      = 0;
 
 // ─── Telegram sender ──────────────────────────────────────────────────────────

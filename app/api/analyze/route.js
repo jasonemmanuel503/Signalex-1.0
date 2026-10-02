@@ -83,6 +83,16 @@ import {
   saveSignal,            // V9.0 P2 — per-signal tracking
   updateSignalResult,    // V9.0 P2
   updateSignalStatus,    // V9.0 P2
+  recordSignalInJournal,
+  markJournalEntered,
+  updateJournalResult,
+  updateJournalShadowResult,
+  getJournalRow,
+  getJournalHistory,
+  getSessionJournalStats,
+  getAppState,
+  setAppState,
+  clearAppState,
 } from "../../../lib/db.js";
 import { isNewsBlackout, getUpcomingEvents, forceNewsRefresh, isNewsBlackoutExtended, addDynamicBlackout, detectVolatilitySpike } from "../../../lib/newsFilter.js";
 import {
@@ -97,8 +107,11 @@ import { classifyAll, shouldBlock } from "../../../lib/marketCondition.js";
 import { forecastAll, getCachedForecast, getLastFullRunAge } from "../../../lib/marketForecast.js";
 import { evaluateAndPause, isPaused, pauseRemainingMs, getPauseStatus, clearAllPauses } from "../../../lib/killSwitch.js";
 
-// ─── Self-start the pre-session scheduler on first request ────────────────────
-startScheduler();
+// ─── Self-start the pre-session scheduler on first request (guarded) ──────────
+if (!globalThis.__signalex_scheduler_started) {
+  globalThis.__signalex_scheduler_started = true;
+  startScheduler();
+}
 
 // ─── V9.0 P10: 30-minute market forecast background loop ──────────────────────
 // Runs independently of signal requests. Populates forecast cache so
@@ -112,7 +125,7 @@ function startForecastLoop() {
 
   async function runForecastCycle() {
     try {
-      const backendUrl = process.env.PYTHON_BACKEND_URL || "http://localhost:8000";
+      const backendUrl = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
       const res = await fetch(`${backendUrl}/prices`, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) { console.warn("[V9.0 forecast] Backend unavailable — skipping forecast cycle"); return; }
       const data  = await res.json();
@@ -257,7 +270,7 @@ startForecastLoop();
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const PYTHON_BACKEND = process.env.PYTHON_BACKEND_URL || "http://localhost:8000";
+const PYTHON_BACKEND = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
 const VERSION = "7.0.4.2";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -265,13 +278,20 @@ const VERSION = "7.0.4.2";
 // Handles: trade locking, win/loss tracking, persistent session log
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let _activeTrade       = false;
-let _activeTradeExpiry = null;   // Date object
-
-// V7.0.5 FINAL — Idempotent WIN/LOSS Telegram dispatch
-// Each result is identified by tradeId. Once sent, the ID is stored here
-// so duplicate sends (e.g. double-click, retry) are silently ignored.
-const _resultSentIds = new Set();
+if (!globalThis.__signalex_controller) {
+  const savedLock = getAppState("active_trade", null);
+  const isStopped = getAppState("session_stopped", false);
+  globalThis.__signalex_controller = {
+    activeTrade: savedLock?.locked ?? false,
+    activeTradeExpiry: savedLock?.expiry ? new Date(savedLock.expiry) : null,
+    sessionStopped: Boolean(isStopped),
+    resultSentIds: new Set(),
+  };
+}
+const _ctrl = globalThis.__signalex_controller;
+let _activeTrade       = _ctrl.activeTrade;
+let _activeTradeExpiry = _ctrl.activeTradeExpiry;
+const _resultSentIds   = _ctrl.resultSentIds;
 
 // FIX [4]: Restore session log from SQLite on startup (survives server restarts)
 // FIX [17]: consecutiveLosses — stop trading after 2 losses in a row per session
@@ -297,14 +317,25 @@ let _sessionLog = (() => {
 })();
 
 // FIX [17]: Stop-trade flag — set after 2 consecutive losses, cleared on session reset or win
-let _sessionStopped = _sessionLog.consecutiveLosses >= 2;
+let _sessionStopped = _ctrl.sessionStopped || (_sessionLog.consecutiveLosses >= 2);
 
 function _isTradeActive() {
+  const savedLock = getAppState("active_trade", null);
+  if (savedLock && savedLock.expiry && Date.now() < new Date(savedLock.expiry).getTime()) {
+    _activeTrade = true;
+    _activeTradeExpiry = new Date(savedLock.expiry);
+    _ctrl.activeTrade = true;
+    _ctrl.activeTradeExpiry = _activeTradeExpiry;
+    return true;
+  }
   if (!_activeTrade || !_activeTradeExpiry) return false;
   if (Date.now() >= _activeTradeExpiry.getTime()) {
     // Expired — auto-clear lock
     _activeTrade       = false;
     _activeTradeExpiry = null;
+    _ctrl.activeTrade = false;
+    _ctrl.activeTradeExpiry = null;
+    clearAppState("active_trade");
     return false;
   }
   return true;
@@ -2836,62 +2867,60 @@ function buildEntryInstruction(entryWindow, expiry, expirySecs) {
 // OTC pairs have no reliable post-expiry price — they use manual PATCH fallback.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function scheduleOutcomeCheck(signal) {
-  // V7.0.4.1 FIX: OTC pairs shadow real forex prices — we CAN auto-detect outcomes.
-  // OTC prices on Pocket Option track real forex with a small spread.
-  // Strip " OTC" suffix to resolve the underlying forex pair from the backend.
-  // e.g. "EUR/USD OTC" → fetches /price/EUR%2FUSD (same underlying rate).
-  // Manual PATCH remains available as fallback if the price fetch fails.
-  const marketType   = signal.marketType || getMarketType(signal.pair);
-  const pairForFetch = marketType === "otc"
-    ? signal.pair.replace(/ OTC$/i, "").trim()
-    : signal.pair;
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE A (A6): SHADOW OUTCOME EVALUATION ONLY (MODEL TRAINING LABEL)
+// Does NOT touch _sessionLog, tier_performance, or user win rate.
+// Computes shadow_result strictly from Deriv CLOSED candles:
+//   entry = open of the first candle starting at/after the signal's intended entry time
+//   exit  = close of the candle ending at expiry
+//   tie   = entry === exit
+// Persisted in journal.shadow_result ONLY.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const checkAt = (signal.expirySecs ?? 60) * 1000 + 5000;  // +5s buffer after expiry
+function scheduleOutcomeCheck(signal) {
+  const expirySecs = signal.expirySecs ?? 60;
+  // Check after expiry + 65s so the exit candle is guaranteed fully closed
+  const checkAt = (expirySecs + 65) * 1000;
 
   setTimeout(async () => {
     try {
-      // Fetch current (exit) price from Python backend single-price endpoint
-      const res = await fetch(
-        `${PYTHON_BACKEND}/price/${encodeURIComponent(pairForFetch)}`,
-        { signal: AbortSignal.timeout(8000) }
-      );
-      if (!res.ok) throw new Error(`Price fetch ${res.status}`);
+      const pairClean = signal.pair.replace(/ OTC$/i, "").trim();
+      const res = await fetch(`${PYTHON_BACKEND}/candles/${encodeURIComponent(pairClean)}?n=15`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) return;
       const data = await res.json();
-      const exitPrice  = data?.price ?? null;
-      const entryPrice = signal.entryPrice ?? null;
+      const candles = data.candles || [];
+      if (candles.length < 2) return;
 
-      if (!exitPrice || !entryPrice) {
-        console.warn(`[V6.5.6] Auto-outcome: missing price for ${signal.pair} — entry: ${entryPrice}, exit: ${exitPrice}`);
-        return;
+      const signalEpoch = Math.floor((signal.timestamp || Date.now()) / 1000);
+      const expiryEpoch = signalEpoch + expirySecs;
+
+      // Entry = open of the first candle starting at/after intended entry time
+      const entryCandle = candles.find((c) => c.epoch >= signalEpoch) || candles[0];
+      // Exit = close of the candle ending at expiry
+      const exitCandle = [...candles].reverse().find((c) => c.epoch <= expiryEpoch) || candles[candles.length - 1];
+
+      const entryPrice = entryCandle?.open;
+      const exitPrice  = exitCandle?.close;
+      if (entryPrice == null || exitPrice == null) return;
+
+      let shadowResult = "TIE";
+      if (signal.direction === "BUY") {
+        shadowResult = exitPrice > entryPrice ? "WIN" : (exitPrice < entryPrice ? "LOSS" : "TIE");
+      } else {
+        shadowResult = exitPrice < entryPrice ? "WIN" : (exitPrice > entryPrice ? "LOSS" : "TIE");
       }
 
-      const isBuy  = signal.direction === "BUY";
-      const result = isBuy
-        ? (exitPrice > entryPrice ? "WIN" : "LOSS")
-        : (exitPrice < entryPrice ? "WIN" : "LOSS");
-
-      // Update in-memory trade log
-      updateTradeResult(signal.id, result, exitPrice);
-
-      // Update adaptive learning tier performance (also persists to SQLite)
-      if (signal.signalTier) {
-        updateTierPerformance(signal.signalTier, result);
-      }
-
-      // Update session log counters
-      if (result === "WIN")  _sessionLog.wins++;
-      else                   _sessionLog.losses++;
-      _sessionLog.total++;
+      // Store in journal.shadow_result (model training only — NEVER in _sessionLog)
+      updateJournalShadowResult(signal.id, shadowResult);
 
       console.log(
-        `[V9.0] AUTO-OUTCOME ${signal.pair} ${signal.direction}` +
-        ` → ${result} | entry: ${entryPrice} | exit: ${exitPrice}` +
-        (marketType === "otc" ? ` | fetched via: ${pairForFetch} (OTC shadow)` : "")
+        `[Phase A SHADOW] ${signal.pair} ${signal.direction} → ${shadowResult}` +
+        ` | entry(O): ${entryPrice} | exit(C): ${exitPrice} | signalId: ${signal.id}`
       );
     } catch (err) {
-      console.warn(`[V6.5.6] Auto-outcome check failed for ${signal.pair}:`, err.message);
-      // Silent fail — manual PATCH endpoint remains available as fallback
+      console.warn(`[Phase A] Shadow outcome check failed for ${signal.pair}:`, err.message);
     }
   }, checkAt);
 }
