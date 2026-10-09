@@ -20,6 +20,11 @@ __pycache__/
 venv/
 .venv/
 env/
+**/venv/
+**/.venv/
+.pytest_cache/
+po-gateway/.env
 .env.*
 !.env.example
+!po-gateway/.env.example
 *.db-journal

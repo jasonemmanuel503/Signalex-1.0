@@ -106,6 +106,8 @@ import {
 import { classifyAll, shouldBlock } from "../../../lib/marketCondition.js";
 import { forecastAll, getCachedForecast, getLastFullRunAge } from "../../../lib/marketForecast.js";
 import { evaluateAndPause, isPaused, pauseRemainingMs, getPauseStatus, clearAllPauses } from "../../../lib/killSwitch.js";
+import { resolveAllMarketData, calcBreakEven } from "../../../lib/trading/priceResolver.js";
+import { scheduleShadowEvaluation } from "../../../lib/trading/shadowEvaluator.js";
 
 // ─── Self-start the pre-session scheduler on first request (guarded) ──────────
 if (!globalThis.__signalex_scheduler_started) {
@@ -2772,48 +2774,9 @@ function updateTradeResult(id, result, exitPrice = null) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FALLBACK PRICE GENERATOR  [PROTECTED]
+// SYNTHETIC PRICE GENERATORS PERMANENTLY REMOVED
+// Per specification Section 6.2: If real data is missing, the answer is "no signal".
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const PAIRS_FALLBACK = [
-  { id: "EUR/USD OTC", base: 1.0851, vol: 0.0018 },
-  { id: "GBP/USD OTC", base: 1.2645, vol: 0.0025 },
-  { id: "USD/JPY OTC", base: 149.52, vol: 0.38   },
-  { id: "AUD/USD OTC", base: 0.6553, vol: 0.0017 },
-  { id: "USD/CAD OTC", base: 1.3582, vol: 0.0019 },
-  { id: "EUR/GBP OTC", base: 0.8572, vol: 0.0012 },
-  { id: "NZD/USD OTC", base: 0.6081, vol: 0.0016 },
-  { id: "USD/CHF OTC", base: 0.9012, vol: 0.0015 },
-];
-
-function seededRand(seed) {
-  const x = Math.sin(seed + 1) * 10000;
-  return x - Math.floor(x);
-}
-
-function generatePrices(base, vol, pairIndex, n = 200) {
-  const prices = [];
-  let p = base;
-  const trendBias = (seededRand(pairIndex * 100) - 0.5) * vol * 0.4;
-  for (let i = 0; i < n; i++) {
-    const s      = pairIndex * 10000 + i;
-    const change = Math.sin(i / 15) * vol * 0.5 + trendBias + (seededRand(s) - 0.5) * vol;
-    const open   = p;
-    const close  = p + change;
-    const high   = Math.max(open, close) + seededRand(s + 1) * vol * 0.5;
-    const low    = Math.min(open, close) - seededRand(s + 2) * vol * 0.5;
-    prices.push({ open, high, low, close, volume: 500 + seededRand(s + 3) * 700 });
-    p = close;
-  }
-  return prices;
-}
-
-function buildFallbackMarketData() {
-  return PAIRS_FALLBACK.map((p, i) => ({
-    pair:   p.id,
-    prices: generatePrices(p.base, p.vol, i, 200),
-  }));
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // V6.5.6 [1] — DYNAMIC POSITION SIZING
@@ -2985,16 +2948,12 @@ async function fetchDirectFallback() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function fetchRealPrices() {
-  const withTimeout = (p, ms) =>
-    Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`Timeout ${ms}ms`)), ms))]);
   try {
-    const res  = await withTimeout(fetch(`${PYTHON_BACKEND}/prices`), 25000);
-    if (!res.ok) throw new Error(`Backend ${res.status}`);
-    const data = await withTimeout(res.json(), 5000);
-    if (!data?.pairs?.length) throw new Error("No pairs");
+    const data = await resolveAllMarketData(80);
+    if (!data?.pairs?.length) return null;
     return { pairs: data.pairs, source: data.source };
   } catch (err) {
-    console.warn(`[analyze] Python backend: ${err.message} — using fallback data`);
+    console.warn(`[analyze] Price resolver error: ${err.message}`);
     return null;
   }
 }
@@ -3324,46 +3283,21 @@ export async function POST(request) {
       });
     }
 
-    // ── V6.5.6 [5]: Backend-down hard alert ──────────────────────────────────
-    // Tier 1: Python backend (primary — all pairs, full candle data)
-    // Tier 2: Direct JS Yahoo fetch (emergency — 3 forex pairs only)
-    // Tier 3: HARD STOP — no signals on simulated/demo data
-    const backendAlive = await checkBackendHealth();
-    let realData   = null;
-    let dataSource = "unknown";
-    let isRealData = false;
+    // ── V10: Real Price Resolver (Pocket Option Primary + Deriv Cross-check) ───
+    let realData = await fetchRealPrices();
+    let dataSource = realData?.source ?? "none";
+    let isRealData = Boolean(realData?.pairs?.length);
 
-    if (backendAlive) {
-      realData = await fetchRealPrices();
-      if (realData) {
-        isRealData = true;
-        dataSource = realData.source ?? "python_backend";
-      }
-    }
-
-    if (!realData) {
-      // Tier 2: try direct Yahoo Finance fetch for a few key pairs
-      console.warn("[V6.5.6] Python backend unreachable — attempting direct Yahoo fallback");
-      const fallbackData = await fetchDirectFallback();
-      if (fallbackData && fallbackData.pairs?.length > 0) {
-        realData   = fallbackData;
-        isRealData = true;
-        dataSource = "direct_yahoo_fallback";
-        console.warn(`[V6.5.6] Direct Yahoo fallback: ${fallbackData.pairs.length} pairs recovered`);
-      }
-    }
-
-    if (!realData) {
-      // Tier 3: HARD STOP — backend is down and no live data available
-      console.error("[V6.5.6] All data sources failed — blocking signal generation");
+    if (!isRealData) {
+      console.error("[V10] Real market data unavailable — blocking signal generation");
       return NextResponse.json({
         blocked:         true,
-        reason:          "backend_down",
-        message:         "Python price backend is unreachable and direct Yahoo fallback failed. No signals issued. Check server status.",
+        reason:          "no_market_data",
+        message:         "Live market data from Pocket Option / Deriv is currently unavailable or stale. No signals issued.",
         signals:         [],
         isRealData:      false,
         dataSource:      "none",
-        version:         "7.0.4.1",
+        version:         "10.0.0",
         controllerState: _controllerState(),
       });
     }
@@ -3383,9 +3317,12 @@ export async function POST(request) {
     const allPricePairs = realData.pairs
       .filter((p) => p.source !== "stooq")
       .map((p) => ({
-        pair:   p.pair,
-        prices: p.candles ?? p.prices ?? [],
-        source: p.source,
+        pair:       p.pair,
+        prices:     p.candles ?? p.prices ?? [],
+        source:     p.source,
+        payout_pct: p.payout_pct || 85,
+        break_even: p.break_even || calcBreakEven(p.payout_pct || 85),
+        market:     p.market || (p.pair.includes("OTC") ? "otc" : "forex"),
       }));
 
     const { t }       = getGMT1Time();
@@ -3582,6 +3519,10 @@ export async function POST(request) {
       const prices    = pairEntry?.prices ?? pairEntry?.candles ?? [];
       sig.entryPrice  = prices.length > 0 ? prices[prices.length - 1].close : null;
       sig.id          = `${sig.pair}_${Date.now()}`;
+      sig.payout_pct  = pairEntry?.payout_pct || 85;
+      sig.break_even  = pairEntry?.break_even || calcBreakEven(sig.payout_pct);
+      sig.market      = pairEntry?.market || (sig.pair.includes("OTC") ? "otc" : "forex");
+      sig.price_source = pairEntry?.source || "po";
 
       logTrade(sig);
       sessionTradeCount++;
@@ -3604,8 +3545,12 @@ export async function POST(request) {
           expirySecs:   sig.expirySecs,
           strategy:     sig.strategyUsed,
           createdAt:    Date.now(),
+          payout_pct:   sig.payout_pct,
+          break_even:   sig.break_even,
+          market:       sig.market,
+          price_source: sig.price_source,
         });
-        console.log(`[V9.0 P2] PRIMARY signal saved: ${sig.pair} ${sig.direction} conf=${sig.confidence} session=${currentKey}`);
+        console.log(`[V9.0 P2] PRIMARY signal saved: ${sig.pair} ${sig.direction} conf=${sig.confidence} payout=${sig.payout_pct}%`);
       } catch (sigErr) {
         console.warn("[V9.0] saveSignal error (non-fatal):", sigErr.message);
       }
@@ -3619,6 +3564,9 @@ export async function POST(request) {
 
       // V6.5.6: schedule automatic win/loss detection for forex pairs
       scheduleOutcomeCheck(sig);
+
+      // Section 6.8: Honest shadow evaluation on closed PO candles for every signal
+      scheduleShadowEvaluation(sig);
 
       console.log(`[V6.5.6] SIGNAL EMITTED | ${sig.pair} | ${sig.direction} | Strategy: ${sig.strategyUsed} | Market: ${sig.marketType?.toUpperCase()} | Score: ${sig.marketQualityScore} | Tier: ${sig.signalTier} | Size: ${sig.positionSize}% | Expiry: ${sig.expiry} | Entry: ${sig.entryPrice} | Next check: ${sig.nextSignalCheckDelaySecs}s`);
     });

@@ -1,0 +1,153 @@
+import pytest
+from httpx import AsyncClient, ASGITransport
+import os
+import sys
+
+# Ensure po-gateway is in sys.path
+gateway_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if gateway_dir not in sys.path:
+    sys.path.insert(0, gateway_dir)
+
+os.environ["PO_USE_FAKE_ADAPTER"] = "true"
+os.environ["INTERNAL_API_TOKEN"] = "test_token_123"
+os.environ["MAX_STAKE_HARD_CAP"] = "50.0"
+os.environ["DATA_DIR"] = "/tmp/test_po_data"
+
+from main import app, get_adapter, storage
+
+HEADERS = {"X-Internal-Token": "test_token_123"}
+
+@pytest.fixture(autouse=True)
+async def setup_test_env():
+    # Clean test tables between runs
+    import aiosqlite, main
+    main.kill_switch_engaged = False
+    await storage.init_db()
+    async with aiosqlite.connect(storage.orders_db_path) as db:
+        await db.execute("DELETE FROM po_orders")
+        await db.commit()
+    ad = get_adapter()
+    await ad.connect()
+
+@pytest.mark.asyncio
+async def test_auth_protection():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Request without token must be rejected 401
+        res = await client.get("/health")
+        assert res.status_code == 401
+
+        # Request with wrong token must be rejected 401
+        res = await client.get("/health", headers={"X-Internal-Token": "wrong"})
+        assert res.status_code == 401
+
+        # Request with correct token succeeds
+        res = await client.get("/health", headers=HEADERS)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "ok"
+        assert data["connected"] is True
+        assert data["session"] == "valid"
+
+@pytest.mark.asyncio
+async def test_assets_endpoint():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/assets", headers=HEADERS)
+        assert res.status_code == 200
+        assets = res.json()
+        assert len(assets) >= 5
+        pairs = {a["pair"]: a for a in assets}
+        assert "EURUSD" in pairs
+        assert "AUDCAD_otc" in pairs
+        assert pairs["AUDCAD_otc"]["is_otc"] is True
+        assert pairs["EURUSD"]["is_otc"] is False
+        assert pairs["EURUSD"]["payout_pct"] >= 80
+
+@pytest.mark.asyncio
+async def test_closed_candles_rule():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/candles/EURUSD?n=10", headers=HEADERS)
+        assert res.status_code == 200
+        candles = res.json()
+        assert len(candles) > 0
+        import time
+        now_bucket = (int(time.time()) // 60) * 60
+        # EVERY returned candle MUST be strictly closed (prior to current running bucket)
+        for c in candles:
+            assert c["timestamp"] < now_bucket
+            assert "open" in c and "close" in c and "high" in c and "low" in c
+
+@pytest.mark.asyncio
+async def test_order_guardrails_and_idempotency():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Invalid expiry rejected
+        res = await client.post("/orders", json={
+            "idempotency_key": "test_invalid_expiry",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 10.0,
+            "expiry_secs": 45,  # Invalid
+        }, headers=HEADERS)
+        assert res.status_code == 400
+
+        # 2. Stake exceeding hard cap rejected
+        res = await client.post("/orders", json={
+            "idempotency_key": "test_too_high_stake",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 100.0,  # Exceeds 50.0 cap
+            "expiry_secs": 60,
+        }, headers=HEADERS)
+        assert res.status_code == 400
+        assert "hard cap" in res.json()["detail"].lower()
+
+        # 3. Valid order accepted
+        res = await client.post("/orders", json={
+            "idempotency_key": "unique_sig_001",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 10.0,
+            "expiry_secs": 60,
+            "signal_price": 1.08500
+        }, headers=HEADERS)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "accepted"
+        assert "deal_id" in data
+        assert data["entry_price"] > 0
+        assert data["payout_pct"] >= 80
+
+        # 4. Duplicate idempotency key blocked
+        res_dup = await client.post("/orders", json={
+            "idempotency_key": "unique_sig_001",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 10.0,
+            "expiry_secs": 60,
+        }, headers=HEADERS)
+        assert res_dup.status_code == 200
+        dup_data = res_dup.json()
+        assert dup_data["status"] == "already_processed"
+
+@pytest.mark.asyncio
+async def test_kill_switch():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Trigger kill
+        kill_res = await client.post("/kill", headers=HEADERS)
+        assert kill_res.status_code == 200
+        assert kill_res.json()["kill_active"] is True
+
+        # Subsequent orders must be rejected
+        res = await client.post("/orders", json={
+            "idempotency_key": "post_kill_order",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 5.0,
+            "expiry_secs": 60,
+        }, headers=HEADERS)
+        assert res.status_code == 400
+        assert "kill switch is active" in res.json()["detail"].lower()

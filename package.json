@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "next": "14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
@@ -20,5 +21,5 @@
     "eslint": "^8",
     "eslint-config-next": "14.2.0"
   },
-  "description": "SIGNALEX V9.0 \u2014 Trading Signal System"
+  "description": "SIGNALEX V9.0 — Trading Signal System"
 }

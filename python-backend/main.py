@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from candle_store import get_candles, count_candles
@@ -36,22 +36,13 @@ logging.basicConfig(
 log = logging.getLogger("signalex.main")
 
 ALLOW_YAHOO_FALLBACK = os.getenv("ALLOW_YAHOO_FALLBACK", "false").lower() == "true"
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "dev_internal_token_signalex_2026")
 
-# Standard OTC pairs in Signalex
-OTC_PAIRS = [
-    {"id": "EUR/USD OTC", "twin": "EUR/USD"},
-    {"id": "GBP/USD OTC", "twin": "GBP/USD"},
-    {"id": "USD/JPY OTC", "twin": "USD/JPY"},
-    {"id": "AUD/USD OTC", "twin": "AUD/USD"},
-    {"id": "USD/CAD OTC", "twin": "USD/CAD"},
-    {"id": "EUR/GBP OTC", "twin": "EUR/GBP"},
-    {"id": "NZD/USD OTC", "twin": "NZD/USD"},
-    {"id": "USD/CHF OTC", "twin": "USD/CHF"},
-    {"id": "EUR/JPY OTC", "twin": "EUR/JPY"},
-    {"id": "GBP/JPY OTC", "twin": "GBP/JPY"},
-    {"id": "AUD/JPY OTC", "twin": "AUD/JPY"},
-    {"id": "EUR/CHF OTC", "twin": "EUR/CHF"},
-]
+def verify_internal_token(x_internal_token: Optional[str] = Header(None)):
+    if INTERNAL_API_TOKEN and x_internal_token != INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-Token header")
+
+# Standard Forex pairs in Deriv backend (OTC is handled strictly by po-gateway)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,13 +53,19 @@ async def lifespan(app: FastAPI):
     client_instance.stop()
 
 app = FastAPI(title="SIGNALEX V10 Data Backend", version="10.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"]
+)
 
 # Ensure client starts immediately
 client_instance.start()
 
 @app.get("/")
-async def root():
+async def root(x_internal_token: Optional[str] = Header(None)):
+    verify_internal_token(x_internal_token)
     market_open = is_forex_market_open()
     health = get_deriv_health()
     return {
@@ -86,7 +83,8 @@ async def root():
     }
 
 @app.get("/health")
-async def health():
+async def health(x_internal_token: Optional[str] = Header(None)):
+    verify_internal_token(x_internal_token)
     return {
         "status": "ok",
         "version": "10.0.0",
@@ -97,30 +95,10 @@ async def health():
     }
 
 @app.get("/prices")
-async def get_all_prices():
+async def get_all_prices(x_internal_token: Optional[str] = Header(None)):
+    verify_internal_token(x_internal_token)
     market_open = is_forex_market_open()
     results = get_all_pairs_data()
-
-    # Append OTC pairs marked as proxy / collecting data (Phase D)
-    for otc in OTC_PAIRS:
-        twin_data = get_pair_data(otc["twin"])
-        results.append({
-            "pair": otc["id"],
-            "symbol": otc["id"],
-            "market": "otc",
-            "source": "deriv",
-            "proxy": True,
-            "collectingData": True,
-            "status": "OTC - collecting data (Phase D)",
-            "lastPrice": twin_data.get("lastPrice", 0.0),
-            "candles": twin_data.get("candles", []),
-            "candleCount": twin_data.get("candleCount", 0),
-            "fetchedAt": twin_data.get("fetchedAt", datetime.now(timezone.utc).isoformat()),
-            "stale": twin_data.get("stale", False),
-            "ageSeconds": twin_data.get("ageSeconds", 0),
-            "marketOpen": market_open,
-            "lastCandleEpoch": twin_data.get("lastCandleEpoch", 0),
-        })
 
     return {
         "pairs": results,
@@ -129,34 +107,26 @@ async def get_all_prices():
         "marketOpen": market_open,
         "is_weekend": not market_open,
         "forex_count": len(FOREX_PAIR_MAP),
-        "otc_count": len(OTC_PAIRS),
+        "otc_count": 0,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 @app.get("/price/{pair_id:path}")
-async def get_single_price(pair_id: str):
+async def get_single_price(pair_id: str, x_internal_token: Optional[str] = Header(None)):
+    verify_internal_token(x_internal_token)
     clean_pair = pair_id.replace("%2F", "/").strip()
-    is_otc = "OTC" in clean_pair
-    twin = clean_pair.replace(" OTC", "").strip() if is_otc else clean_pair
+    if "OTC" in clean_pair:
+        raise HTTPException(status_code=400, detail="OTC pairs are served exclusively by po-gateway")
 
-    if twin not in FOREX_PAIR_MAP:
+    if clean_pair not in FOREX_PAIR_MAP:
         raise HTTPException(status_code=404, detail=f"Unknown pair: {clean_pair}")
 
-    data = get_pair_data(twin)
-    if is_otc:
-        data = {
-            **data,
-            "pair": clean_pair,
-            "symbol": clean_pair,
-            "market": "otc",
-            "proxy": True,
-            "collectingData": True,
-            "status": "OTC - collecting data (Phase D)",
-        }
+    data = get_pair_data(clean_pair)
     return data
 
 @app.get("/candles/{pair_id:path}")
-async def get_pair_candles(pair_id: str, n: int = Query(default=500, le=5000)):
+async def get_pair_candles(pair_id: str, n: int = Query(default=500, le=5000), x_internal_token: Optional[str] = Header(None)):
+    verify_internal_token(x_internal_token)
     clean_pair = pair_id.replace("%2F", "/").replace(" OTC", "").strip()
     if clean_pair not in FOREX_PAIR_MAP:
         raise HTTPException(status_code=404, detail=f"Unknown pair: {clean_pair}")
@@ -172,4 +142,4 @@ async def get_pair_candles(pair_id: str, n: int = Query(default=500, le=5000)):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PYTHON_BACKEND_PORT", "8001"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
+    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False, log_level="info")
