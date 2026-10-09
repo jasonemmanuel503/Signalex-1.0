@@ -1,18 +1,43 @@
 const { spawn, execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const rootDir = path.resolve(__dirname, '..');
 const pythonBackendDir = path.resolve(rootDir, 'python-backend');
 const poGatewayDir = path.resolve(rootDir, 'po-gateway');
+const poVenvPython = path.resolve(poGatewayDir, 'venv/bin/python');
 
 let isTerminating = false;
 const activeProcesses = [];
 
-// 1. Ensure Python dependencies are installed if missing
+// Clean up any stray processes on 8001 and 8002 before starting
+function terminateStrayListeners(ports) {
+  try {
+    const ssOut = execSync('ss -tlpn 2>/dev/null', { encoding: 'utf8' });
+    for (const line of ssOut.split('\n')) {
+      for (const port of ports) {
+        if (line.includes(`:${port}`)) {
+          const match = line.match(/pid=(\d+)/);
+          if (match) {
+            const pid = parseInt(match[1], 10);
+            if (pid && pid !== process.pid) {
+              console.log(`[start-all] Terminating stray process on port ${port} (PID ${pid})...`);
+              try { process.kill(pid, 'SIGKILL'); } catch {}
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+terminateStrayListeners([8001, 8002]);
+
+// 1. Ensure Python dependencies for python-backend are installed if missing
 try {
   execSync('python3 -c "import fastapi, uvicorn, httpx, pydantic, websockets"', { stdio: 'ignore' });
 } catch {
-  console.log('[start-all] Python dependencies missing, installing...');
+  console.log('[start-all] python-backend dependencies missing, installing...');
   try {
     execSync('pip3 install --break-system-packages -r python-backend/requirements.txt aiosqlite', {
       cwd: rootDir,
@@ -20,6 +45,32 @@ try {
     });
   } catch (err) {
     console.error('[start-all] Warning: pip install encountered an issue:', err.message);
+  }
+}
+
+// 2. Ensure po-gateway venv with Python 3.13 and pocket-option is set up
+let poVenvValid = false;
+if (fs.existsSync(poVenvPython)) {
+  try {
+    execSync(`"${poVenvPython}" -c "import pocket_option"`, { stdio: 'ignore' });
+    poVenvValid = true;
+  } catch {
+    poVenvValid = false;
+  }
+}
+
+if (!poVenvValid) {
+  console.log('[start-all] po-gateway venv or pocket_option missing, setting up...');
+  try {
+    execSync('which uv || pip3 install --break-system-packages uv', { stdio: 'inherit' });
+    execSync(`uv venv "${path.resolve(poGatewayDir, 'venv')}" --python 3.13`, { cwd: rootDir, stdio: 'inherit' });
+    execSync(`uv pip install --python "${poVenvPython}" -r "${path.resolve(poGatewayDir, 'requirements.txt')}"`, {
+      cwd: rootDir,
+      stdio: 'inherit',
+    });
+    console.log('[start-all] po-gateway venv successfully initialized with Python 3.13.');
+  } catch (err) {
+    console.error('[start-all] Error setting up po-gateway venv:', err.message);
   }
 }
 
@@ -54,7 +105,7 @@ function launchProcess(name, command, args, cwd, customEnv = {}) {
   return proc;
 }
 
-// 2. Launch Python Market Data Backend (Deriv / Closed Candles) on port 8001
+// 3. Launch Python Market Data Backend (Deriv / Closed Candles) on port 8001
 launchProcess(
   'python-backend',
   'python3',
@@ -66,14 +117,15 @@ launchProcess(
   }
 );
 
-// 3. Launch Pocket Option Gateway on port 8002
+// 4. Launch Pocket Option Gateway on port 8002 using venv interpreter
+const poInterpreter = fs.existsSync(poVenvPython) ? poVenvPython : 'python3';
 launchProcess(
   'po-gateway',
-  'python3',
+  poInterpreter,
   ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8002'],
   poGatewayDir,
   {
-    PO_USE_FAKE_ADAPTER: process.env.PO_USE_FAKE_ADAPTER || 'true',
+    PO_USE_FAKE_ADAPTER: process.env.PO_USE_FAKE_ADAPTER || 'false',
     INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || 'dev_internal_token_signalex_2026',
   }
 );
