@@ -108,6 +108,7 @@ import { forecastAll, getCachedForecast, getLastFullRunAge } from "../../../lib/
 import { evaluateAndPause, isPaused, pauseRemainingMs, getPauseStatus, clearAllPauses } from "../../../lib/killSwitch.js";
 import { resolveAllMarketData, calcBreakEven } from "../../../lib/trading/priceResolver.js";
 import { scheduleShadowEvaluation } from "../../../lib/trading/shadowEvaluator.js";
+import { orchestrator } from "../../../lib/trading/orchestrator.js";
 
 // ─── Self-start the pre-session scheduler on first request (guarded) ──────────
 if (!globalThis.__signalex_scheduler_started) {
@@ -3261,6 +3262,18 @@ export async function POST(request) {
       }
       return NextResponse.json({ ok: true, reported: true });
     }
+    // Section 7.1: Check Orchestrator Mode (OFF: analysis paused, no scans, no signals)
+    const orchState = orchestrator.getState();
+    if (orchState.mode === "OFF") {
+      return NextResponse.json({
+        blocked:         true,
+        reason:          "engine_off",
+        message:         "Trading engine is in OFF mode. Scans and signals are paused.",
+        signals:         [],
+        controllerState: _controllerState(),
+      });
+    }
+
     // Must run BEFORE backend fetch so we never waste a data call during news.
     // isNewsBlackout() is cached for 30 min — negligible overhead per scan.
     if (body.forceNewsRefresh) {
@@ -3567,6 +3580,26 @@ export async function POST(request) {
 
       // Section 6.8: Honest shadow evaluation on closed PO candles for every signal
       scheduleShadowEvaluation(sig);
+
+      // Section 7: Auto / Semi Execution Flow via Orchestrator
+      if (orchState.mode === "AUTO") {
+        orchestrator.dispatchOrder(sig, "auto").then((res) => {
+          if (res.success) {
+            console.log(`[analyze] Auto trade executed: ${res.tradeId} (Deal ${res.dealId})`);
+          } else {
+            console.warn(`[analyze] Auto trade skipped: ${res.reason}`);
+          }
+        }).catch((err) => {
+          console.error(`[analyze] Auto trade error:`, err.message);
+        });
+      } else if (orchState.mode === "SEMI") {
+        const pendingConf = orchestrator.createPendingTrade(sig);
+        if (pendingConf) {
+          sig.pendingConfirmationId = pendingConf.id;
+          sig.pendingExpiresAt = pendingConf.expires_at;
+          console.log(`[analyze] SEMI pending trade queued: ${pendingConf.id} (20s countdown)`);
+        }
+      }
 
       console.log(`[V6.5.6] SIGNAL EMITTED | ${sig.pair} | ${sig.direction} | Strategy: ${sig.strategyUsed} | Market: ${sig.marketType?.toUpperCase()} | Score: ${sig.marketQualityScore} | Tier: ${sig.signalTier} | Size: ${sig.positionSize}% | Expiry: ${sig.expiry} | Entry: ${sig.entryPrice} | Next check: ${sig.nextSignalCheckDelaySecs}s`);
     });

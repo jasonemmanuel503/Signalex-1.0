@@ -22,7 +22,7 @@ async function runStoreTests() {
 
   // 1. Settings
   const initialSettings = getAppSettings();
-  assert.strictEqual(initialSettings.mode, "OFF");
+  assert.strictEqual(initialSettings.mode, "SIGNALS", "Restart safety default mode is SIGNALS");
   assert.strictEqual(initialSettings.loss_streak_limit, 3);
 
   updateAppSettings({ mode: "SIGNALS", loss_streak_limit: 3 });
