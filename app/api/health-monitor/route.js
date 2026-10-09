@@ -71,7 +71,9 @@ async function checkBackend() {
   let details  = {};
 
   try {
+    const internalToken = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
     const res = await fetch(`${PYTHON_BACKEND}/health`, {
+      headers: { "X-Internal-Token": internalToken },
       signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {

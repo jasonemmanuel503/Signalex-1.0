@@ -33,7 +33,11 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, global_risk_mode: body.globalRiskMode });
     }
     const backendUrl = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
-    const res = await fetch(`${backendUrl}/prices`, { signal: AbortSignal.timeout(15000) });
+    const internalToken = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
+    const res = await fetch(`${backendUrl}/prices`, {
+      headers: { "X-Internal-Token": internalToken },
+      signal: AbortSignal.timeout(15000),
+    });
     if (!res.ok) return NextResponse.json({ ok: false, error: "Backend unavailable" }, { status: 503 });
     const data    = await res.json();
     const pairs   = (data.pairs || []).map((p) => ({ pair: p.pair, candles: p.candles || [] }));

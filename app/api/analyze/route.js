@@ -129,7 +129,11 @@ function startForecastLoop() {
   async function runForecastCycle() {
     try {
       const backendUrl = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
-      const res = await fetch(`${backendUrl}/prices`, { signal: AbortSignal.timeout(15000) });
+      const internalToken = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
+      const res = await fetch(`${backendUrl}/prices`, {
+        headers: { "X-Internal-Token": internalToken },
+        signal: AbortSignal.timeout(15000),
+      });
       if (!res.ok) { console.warn("[V9.0 forecast] Backend unavailable — skipping forecast cycle"); return; }
       const data  = await res.json();
       const pairs = (data.pairs || []).map((p) => ({ pair: p.pair, candles: p.candles || [] }));
@@ -2849,7 +2853,9 @@ function scheduleOutcomeCheck(signal) {
   setTimeout(async () => {
     try {
       const pairClean = signal.pair.replace(/ OTC$/i, "").trim();
+      const internalToken = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
       const res = await fetch(`${PYTHON_BACKEND}/candles/${encodeURIComponent(pairClean)}?n=15`, {
+        headers: { "X-Internal-Token": internalToken },
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return;
@@ -2897,7 +2903,9 @@ function scheduleOutcomeCheck(signal) {
 
 async function checkBackendHealth() {
   try {
+    const internalToken = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
     const res = await fetch(`${PYTHON_BACKEND}/health`, {
+      headers: { "X-Internal-Token": internalToken },
       signal: AbortSignal.timeout(3000),
     });
     return res.ok;
