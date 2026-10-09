@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // GET /api/forecast  — current forecasts + daily outlook
 // POST /api/forecast — on-demand run or toggle GLOBAL_RISK_MODE
 import { NextResponse } from "next/server";

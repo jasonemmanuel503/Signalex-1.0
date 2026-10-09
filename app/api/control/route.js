@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { orchestrator } from "../../../lib/trading/orchestrator.js";
 import { updateAppSettings, getAppSettings, writeAuditLog, getTradeHistory } from "../../../lib/store/index.js";

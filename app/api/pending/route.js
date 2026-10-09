@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getPendingConfirmations } from "../../../lib/store/index.js";
 import { orchestrator } from "../../../lib/trading/orchestrator.js";

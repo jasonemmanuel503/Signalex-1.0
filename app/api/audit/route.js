@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getAuditLogs } from "../../../lib/store/index.js";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req) {
   try {
     const url = new URL(req.url);

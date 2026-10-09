@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // GET /api/stats — persistent performance statistics (P3)
 import { NextResponse } from "next/server";
 import { getStats, getWinRateByTier, loadSessionHistory } from "../../../lib/db.js";

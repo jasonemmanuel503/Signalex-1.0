@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // POST /api/manual-execute — promote SECONDARY signal to ACTIVE + mark result (P5)
 import { NextResponse } from "next/server";
 import { getSignalById, updateSignalStatus, updateSignalResult, saveSignal } from "../../../lib/db.js";

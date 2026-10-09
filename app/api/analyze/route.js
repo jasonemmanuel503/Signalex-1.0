@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 // SIGNALEX V8.0 — SIGNAL ENGINE
 // SIGNALEX V8.0 — SIGNAL THROUGHPUT PATCH
 // ═══════════════════════════════════════════════════════════════════════════════
