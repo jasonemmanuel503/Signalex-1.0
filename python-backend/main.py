@@ -10,6 +10,17 @@ PHASE A: Trustworthy data + honest results logging.
 
 import logging
 import os
+import sys
+
+SIGNALEX_ENV = os.getenv("SIGNALEX_ENV", "development").lower()
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "dev_internal_token_signalex_2026")
+
+if SIGNALEX_ENV == "production":
+    if not INTERNAL_API_TOKEN or INTERNAL_API_TOKEN == "dev_internal_token_signalex_2026":
+        raise RuntimeError(
+            "[SIGNALEX_ENV=production] Startup aborted: INTERNAL_API_TOKEN is missing, empty, or set to the default dev token."
+        )
+
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -36,7 +47,11 @@ logging.basicConfig(
 log = logging.getLogger("signalex.main")
 
 ALLOW_YAHOO_FALLBACK = os.getenv("ALLOW_YAHOO_FALLBACK", "false").lower() == "true"
-INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "dev_internal_token_signalex_2026")
+
+if not INTERNAL_API_TOKEN or INTERNAL_API_TOKEN == "dev_internal_token_signalex_2026":
+    log.warning(
+        "[SECURITY WARNING] Running with default or unconfigured INTERNAL_API_TOKEN in non-production mode."
+    )
 
 def verify_internal_token(x_internal_token: Optional[str] = Header(None)):
     if INTERNAL_API_TOKEN and x_internal_token != INTERNAL_API_TOKEN:

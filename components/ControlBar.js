@@ -97,14 +97,18 @@ export default function ControlBar({
     }
   };
 
-  const executeAccountChange = async (targetAccount) => {
+  const executeAccountChange = async (targetAccount, confirm) => {
     setLoadingAccount(true);
     setErrorToast(null);
     try {
+      const payload = { action: "set_account", account: targetAccount };
+      if (targetAccount === "real") {
+        payload.confirm = confirm;
+      }
       const res = await fetch("/api/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set_account", account: targetAccount }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -193,6 +197,27 @@ export default function ControlBar({
           >
             🔥 REAL
           </button>
+          {account === "real" && (
+            <span
+              style={{
+                backgroundColor: "#d13438",
+                color: "#ffffff",
+                fontWeight: "700",
+                fontSize: "11px",
+                padding: "3px 8px",
+                borderRadius: "4px",
+                letterSpacing: "0.5px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                boxShadow: "0 0 10px rgba(209, 52, 56, 0.6)",
+                border: "1px solid #a80000",
+              }}
+              title="Real-money trading is active"
+            >
+              ⚠️ REAL ACCOUNT
+            </span>
+          )}
         </div>
 
         {/* Mode buttons */}
@@ -322,7 +347,7 @@ export default function ControlBar({
               <button
                 className={styles.modalBtnDanger}
                 disabled={realInput !== "REAL" || loadingAccount}
-                onClick={() => executeAccountChange("real")}
+                onClick={() => executeAccountChange("real", realInput)}
               >
                 {loadingAccount ? "Switching…" : "Confirm REAL Account"}
               </button>

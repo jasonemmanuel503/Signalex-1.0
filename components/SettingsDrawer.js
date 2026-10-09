@@ -7,6 +7,7 @@ export default function SettingsDrawer({
   isOpen,
   onClose,
   currentSettings = {},
+  currentAccount = "demo",
   onSettingsSaved,
 }) {
   const [formData, setFormData] = useState({
@@ -24,6 +25,34 @@ export default function SettingsDrawer({
   });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [testTradeLoading, setTestTradeLoading] = useState(false);
+  const [testTradeResult, setTestTradeResult] = useState(null);
+  const [testTradeError, setTestTradeError] = useState(null);
+
+  const isDemo = (currentAccount || "demo").toLowerCase() === "demo";
+
+  const handleRunDemoTestTrade = async () => {
+    if (!isDemo) return;
+    setTestTradeLoading(true);
+    setTestTradeResult(null);
+    setTestTradeError(null);
+    try {
+      const res = await fetch("/api/test-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account: "demo" }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Test trade failed");
+      }
+      setTestTradeResult(data);
+    } catch (err) {
+      setTestTradeError(err.message);
+    } finally {
+      setTestTradeLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (currentSettings) {
@@ -287,6 +316,56 @@ export default function SettingsDrawer({
               <span className={styles.helper}>
                 Session windows are descriptive labels. OTC trades continue 24/7.
               </span>
+            </div>
+
+            {/* Demo Test Trade Section */}
+            <div style={{ marginTop: "20px", padding: "14px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", background: "rgba(255,255,255,0.03)" }}>
+              <div style={{ fontWeight: "600", fontSize: "14px", marginBottom: "6px" }}>🧪 Demo Test Trade Diagnostics</div>
+              <p className={styles.helper} style={{ marginBottom: "12px" }}>
+                Execute a single $1.00 demo order (60s expiry) to verify latency, broker connectivity, and the complete deal lifecycle.
+              </p>
+              <button
+                type="button"
+                className={styles.saveBtn}
+                style={{
+                  width: "100%",
+                  backgroundColor: isDemo ? "#0078d4" : "#444",
+                  cursor: isDemo && !testTradeLoading ? "pointer" : "not-allowed",
+                  opacity: isDemo ? 1 : 0.6,
+                }}
+                onClick={handleRunDemoTestTrade}
+                disabled={!isDemo || testTradeLoading}
+              >
+                {testTradeLoading ? "Executing test trade…" : "Run demo test trade"}
+              </button>
+              {!isDemo && (
+                <div style={{ color: "#f1707b", fontSize: "11px", marginTop: "6px" }}>
+                  ⚠️ Test trades can only be run when the account selector is set to DEMO.
+                </div>
+              )}
+              {testTradeError && (
+                <div style={{ color: "#f1707b", fontSize: "12px", marginTop: "8px" }}>
+                  ❌ {testTradeError}
+                </div>
+              )}
+              {testTradeResult && (
+                <div style={{ marginTop: "12px", padding: "10px", background: "rgba(0,0,0,0.4)", borderRadius: "6px", fontSize: "12px", lineHeight: "1.6" }}>
+                  <div style={{ color: "#6bb700", fontWeight: "bold", marginBottom: "4px" }}>
+                    ✅ Trade Accepted — Lifecycle Active
+                  </div>
+                  <div><strong>Order / Deal ID:</strong> {testTradeResult.order_id || testTradeResult.deal_id}</div>
+                  <div><strong>Pair / Direction:</strong> {testTradeResult.pair} ({testTradeResult.direction})</div>
+                  <div><strong>Stake / Expiry:</strong> ${testTradeResult.stake} / {testTradeResult.expiry_secs}s</div>
+                  <div><strong>Entry Price:</strong> {testTradeResult.entry_price}</div>
+                  <div><strong>Payout:</strong> {testTradeResult.payout_pct}%</div>
+                  <div><strong>Execution Latency:</strong> {testTradeResult.latency_ms} ms</div>
+                  {testTradeResult.lifecycle && (
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "rgba(255,255,255,0.8)" }}>
+                      Lifecycle: Sent ({testTradeResult.lifecycle.sent ? "Yes" : "No"}) • Confirmed ({testTradeResult.lifecycle.confirmed ? "Yes" : "No"}) • Open ({testTradeResult.lifecycle.open ? "Yes" : "No"}) • Closed ({testTradeResult.lifecycle.closed ? "Yes" : "No"})
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

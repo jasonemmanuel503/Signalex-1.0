@@ -1,5 +1,29 @@
 import { NextResponse } from "next/server";
 
+function safeTokenCompare(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string" || !provided || !expected) {
+    return false;
+  }
+  const encoder = new TextEncoder();
+  const a = encoder.encode(provided);
+  const b = encoder.encode(expected);
+  if (a.length !== b.length) {
+    return false;
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.timingSafeEqual === "function") {
+    try {
+      return crypto.timingSafeEqual(a, b);
+    } catch {
+      // fallback
+    }
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
 export async function middleware(req) {
   const { pathname } = req.nextUrl;
 
@@ -20,6 +44,15 @@ export async function middleware(req) {
     const webhookToken = req.headers.get("x-telegram-bot-api-secret-token");
     const expectedToken = process.env.TELEGRAM_WEBHOOK_SECRET;
     if (!expectedToken || webhookToken === expectedToken) {
+      return NextResponse.next();
+    }
+  }
+
+  // 3. Internal service token authentication for /api/* routes only
+  const internalApiToken = process.env.INTERNAL_API_TOKEN;
+  if (pathname.startsWith("/api/") && internalApiToken && internalApiToken.trim() !== "") {
+    const providedInternalToken = req.headers.get("x-internal-token");
+    if (providedInternalToken && safeTokenCompare(providedInternalToken, internalApiToken)) {
       return NextResponse.next();
     }
   }

@@ -26,11 +26,23 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
     Fake adapter for deterministic testing and development.
     Simulates real-time price feeds, asset metadata, balances, and deal results.
     """
-    def __init__(self, demo_balance: float = 10000.0, real_balance: float = 250.0):
-        self._connected = False
-        self._session_status: Literal["valid", "expired", "unknown"] = "unknown"
-        self._last_message_at = 0.0
-        self._balances = {"demo": demo_balance, "real": real_balance}
+    def __init__(
+        self,
+        demo_balance: float = 10000.0,
+        real_balance: float = 250.0,
+        real_configured: bool = False,
+    ):
+        self._demo_connected = False
+        self._demo_session_status: Literal["valid", "expired", "unknown"] = "unknown"
+        self._demo_last_message_at = 0.0
+        self._demo_balance = demo_balance
+
+        self._real_configured = real_configured
+        self._real_connected = False
+        self._real_session_status: Literal["valid", "expired", "unknown"] = "unknown"
+        self._real_last_message_at = 0.0
+        self._real_balance = real_balance
+
         self._subscribed_pairs: set[str] = set()
         self._assets: Dict[str, AssetMetadata] = {}
         self._candles: Dict[str, List[CandleData]] = {}
@@ -104,29 +116,43 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
 
     async def connect(self) -> None:
         await asyncio.sleep(0.05)
-        self._connected = True
-        self._session_status = "valid"
-        self._last_message_at = time.time()
+        self._demo_connected = True
+        self._demo_session_status = "valid"
+        self._demo_last_message_at = time.time()
+        if self._real_configured:
+            self._real_connected = True
+            self._real_session_status = "valid"
+            self._real_last_message_at = time.time()
 
     async def disconnect(self) -> None:
-        self._connected = False
-        self._session_status = "unknown"
+        self._demo_connected = False
+        self._demo_session_status = "unknown"
+        self._real_connected = False
+        self._real_session_status = "unknown"
 
-    def is_connected(self) -> bool:
-        return self._connected
+    def is_connected(self, account: Literal["demo", "real"] = "demo") -> bool:
+        if account == "real":
+            return bool(self._real_configured and self._real_connected)
+        return self._demo_connected
 
-    def get_session_status(self) -> Literal["valid", "expired", "unknown"]:
-        return self._session_status
+    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["valid", "expired", "unknown"]:
+        if account == "real":
+            return self._real_session_status if self._real_configured else "unknown"
+        return self._demo_session_status
 
-    def get_last_message_at(self) -> float:
-        return self._last_message_at
+    def get_last_message_at(self, account: Literal["demo", "real"] = "demo") -> float:
+        if account == "real":
+            return self._real_last_message_at if self._real_configured else 0.0
+        return self._demo_last_message_at
 
     async def subscribe(self, pairs: list[str]) -> None:
         self._subscribed_pairs.update(pairs)
-        self._last_message_at = time.time()
+        self._demo_last_message_at = time.time()
+        if self._real_configured:
+            self._real_last_message_at = time.time()
 
     async def get_candles(self, pair: str, n: int = 100) -> list[CandleData]:
-        self._last_message_at = time.time()
+        self._demo_last_message_at = time.time()
         # Always return only closed candles up to current completed minute
         now_bucket = (int(time.time()) // 60) * 60
         candles = self._candles.get(pair, [])
@@ -171,12 +197,34 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
         )
 
     async def get_assets(self) -> list[AssetMetadata]:
-        self._last_message_at = time.time()
+        self._demo_last_message_at = time.time()
         return list(self._assets.values())
 
     async def get_balance(self, account: Literal["demo", "real"]) -> float:
-        self._last_message_at = time.time()
-        return self._balances.get(account, 0.0)
+        if account == "real":
+            if not self._real_configured:
+                raise RuntimeError("Real account is not configured")
+            return float(self._real_balance)
+        return float(self._demo_balance)
+
+    async def get_accounts_status(self) -> dict:
+        demo_status = {
+            "connected": bool(self._demo_connected),
+            "session": self._demo_session_status,
+            "balance": float(self._demo_balance),
+        }
+        if not self._real_configured:
+            real_status = {"status": "not_configured"}
+        else:
+            real_status = {
+                "connected": bool(self._real_connected),
+                "session": self._real_session_status,
+                "balance": float(self._real_balance),
+            }
+        return {
+            "demo": demo_status,
+            "real": real_status,
+        }
 
     async def place_order(
         self,
@@ -186,20 +234,30 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
         expiry_secs: int,
         account: Literal["demo", "real"] = "demo",
     ) -> OrderResult:
-        if not self._connected:
-            raise RuntimeError("Broker not connected")
-        if self._session_status != "valid":
-            raise RuntimeError(f"Session not valid: {self._session_status}")
+        if account == "real":
+            if not self._real_configured:
+                raise RuntimeError("Real account is not configured")
+            if not self._real_connected:
+                raise RuntimeError("Broker not connected on real account")
+            if self._real_session_status != "valid":
+                raise RuntimeError(f"Real session not valid: {self._real_session_status}")
+            if self._real_balance < stake:
+                raise RuntimeError(f"Insufficient real balance: {self._real_balance} < {stake}")
+            self._real_balance -= stake
+            self._real_last_message_at = time.time()
+        else:
+            if not self._demo_connected:
+                raise RuntimeError("Broker not connected on demo account")
+            if self._demo_session_status != "valid":
+                raise RuntimeError(f"Demo session not valid: {self._demo_session_status}")
+            if self._demo_balance < stake:
+                raise RuntimeError(f"Insufficient demo balance: {self._demo_balance} < {stake}")
+            self._demo_balance -= stake
+            self._demo_last_message_at = time.time()
 
         asset = self._assets.get(pair)
         if not asset or not asset.open:
             raise RuntimeError(f"Asset {pair} is closed or not available")
-
-        # Deduct balance
-        current_bal = self._balances.get(account, 0.0)
-        if current_bal < stake:
-            raise RuntimeError(f"Insufficient {account} balance: {current_bal} < {stake}")
-        self._balances[account] -= stake
 
         deal_id = f"mock_deal_{int(time.time()*1000)}_{random.randint(100, 999)}"
         entry_price = self._candles.get(pair, [CandleData(timestamp=int(time.time()), open=1.0, high=1.0, low=1.0, close=1.0)])[-1].close
@@ -241,15 +299,21 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
                  (order.direction == "PUT" and exit_price < order.entry_price)
         is_tie = (exit_price == order.entry_price)
 
+        def _add_balance(account_name, amount):
+            if account_name == "real":
+                self._real_balance += amount
+            else:
+                self._demo_balance += amount
+
         if is_tie:
             order.status = "TIE"
             order.profit = 0.0
-            self._balances[order.account] += order.stake
+            _add_balance(order.account, order.stake)
         elif is_win:
             order.status = "WIN"
             profit = round(order.stake * (order.payout_pct / 100.0), 2)
             order.profit = profit
-            self._balances[order.account] += (order.stake + profit)
+            _add_balance(order.account, order.stake + profit)
         else:
             order.status = "LOSS"
             order.profit = -order.stake

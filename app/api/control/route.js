@@ -121,8 +121,44 @@ export async function POST(req) {
       }
 
       case "set_account": {
-        const { account } = body;
-        const res = await orchestrator.setAccount(account, "user", meta);
+        const { account, confirm } = body;
+        if (account === "real") {
+          if (confirm !== "REAL") {
+            return NextResponse.json(
+              { error: 'Switching to REAL account requires confirmation confirm: "REAL"' },
+              { status: 400 }
+            );
+          }
+          try {
+            const hRes = await fetch(`${PO_GATEWAY_URL}/health`, {
+              headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
+              signal: AbortSignal.timeout(3000),
+            });
+            if (!hRes.ok) {
+              return NextResponse.json(
+                { error: "Cannot switch to REAL account: Gateway health check failed" },
+                { status: 400 }
+              );
+            }
+            const hData = await hRes.json();
+            const realAcc = hData?.accounts?.real;
+            if (!realAcc || realAcc.connected !== true || realAcc.session !== "valid") {
+              const reason = realAcc?.status === "not_configured"
+                ? "Real credentials are not configured"
+                : `Real connection status is ${realAcc?.status || "disconnected"}, session: ${realAcc?.session || "invalid"}`;
+              return NextResponse.json(
+                { error: `Cannot switch to REAL account: ${reason}` },
+                { status: 400 }
+              );
+            }
+          } catch (e) {
+            return NextResponse.json(
+              { error: `Cannot switch to REAL account: Gateway unreachable (${e.message})` },
+              { status: 400 }
+            );
+          }
+        }
+        const res = await orchestrator.setAccount(account, "user", { ...meta, confirm });
         return NextResponse.json({ ok: true, state: res });
       }
 

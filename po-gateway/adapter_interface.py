@@ -57,18 +57,23 @@ class PocketOptionAdapter(ABC):
         pass
 
     @abstractmethod
-    def is_connected(self) -> bool:
-        """Return True if connection is alive."""
+    def is_connected(self, account: Literal["demo", "real"] = "demo") -> bool:
+        """Return True if connection is alive for given account."""
         pass
 
     @abstractmethod
-    def get_session_status(self) -> Literal["valid", "expired", "unknown"]:
-        """Return session authentication status."""
+    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["valid", "expired", "unknown"]:
+        """Return session authentication status for given account."""
         pass
 
     @abstractmethod
-    def get_last_message_at(self) -> float:
-        """Return unix timestamp of last received message."""
+    def get_last_message_at(self, account: Literal["demo", "real"] = "demo") -> float:
+        """Return unix timestamp of last received message for given account."""
+        pass
+
+    @abstractmethod
+    async def get_accounts_status(self) -> dict:
+        """Return structured account status mapping for health endpoint."""
         pass
 
     @abstractmethod

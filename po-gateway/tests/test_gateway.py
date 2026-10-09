@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 import os
 import sys
@@ -17,7 +18,7 @@ from main import app, get_adapter, storage
 
 HEADERS = {"X-Internal-Token": "test_token_123"}
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def setup_test_env():
     # Clean test tables between runs
     import aiosqlite, main
@@ -151,3 +152,57 @@ async def test_kill_switch():
         }, headers=HEADERS)
         assert res.status_code == 400
         assert "kill switch is active" in res.json()["detail"].lower()
+
+@pytest.mark.asyncio
+async def test_health_rich_accounts():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/health", headers=HEADERS)
+        assert res.status_code == 200
+        data = res.json()
+        assert "accounts" in data
+        assert "demo" in data["accounts"]
+        assert data["accounts"]["demo"]["connected"] is True
+        assert data["accounts"]["demo"]["session"] == "valid"
+        assert "balance" in data["accounts"]["demo"]
+        assert "real" in data["accounts"]
+        assert data["accounts"]["real"]["status"] == "not_configured"
+
+@pytest.mark.asyncio
+async def test_demo_test_trade_lifecycle():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Test trade with account=real must be rejected 400
+        res_real = await client.post("/test-trade", json={"account": "real"}, headers=HEADERS)
+        assert res_real.status_code == 400
+        assert "strictly demo-only" in res_real.json()["detail"]
+
+        # 2. Test trade with default demo succeeds with 1.0 stake and 60s expiry
+        res_demo = await client.post("/test-trade", json={}, headers=HEADERS)
+        assert res_demo.status_code == 200
+        data = res_demo.json()
+        assert data["status"] == "accepted"
+        assert data["account"] == "demo"
+        assert data["stake"] == 1.0
+        assert data["expiry_secs"] == 60
+        assert "order_id" in data
+        assert "lifecycle" in data
+        assert data["lifecycle"]["sent"] is True
+        assert data["lifecycle"]["confirmed"] is True
+        assert data["lifecycle"]["open"] is True
+
+@pytest.mark.asyncio
+async def test_real_order_rejected_when_not_configured():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/orders", json={
+            "idempotency_key": "real_unconfigured_001",
+            "account": "real",
+            "pair": "EURUSD",
+            "direction": "CALL",
+            "stake": 10.0,
+            "expiry_secs": 60,
+        }, headers=HEADERS)
+        # Should be rejected because real account is not connected
+        assert res.status_code in (502, 503, 400)
+

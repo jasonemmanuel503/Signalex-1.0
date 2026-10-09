@@ -1972,6 +1972,7 @@ export default function Dashboard() {
           isOpen={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           currentSettings={controlState?.settings}
+          currentAccount={controlState?.account || "demo"}
           onSettingsSaved={(updatedSettings) => {
             setControlState((prev) => ({
               ...prev,

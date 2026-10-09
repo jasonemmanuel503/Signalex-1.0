@@ -14,15 +14,20 @@ export async function POST(req) {
       return NextResponse.json({ error: "Access denied — Email is not authorized" }, { status: 403 });
     }
 
+    const embedded = process.env.EMBEDDED_PREVIEW === "true";
+    const baseCookieOptions = {
+      path: "/",
+      httpOnly: true,
+      sameSite: embedded ? "none" : "lax",
+      secure: embedded || process.env.NODE_ENV === "production",
+      partitioned: embedded,
+    };
+
     if (!isSupabaseConfigured) {
       // In local dev without Supabase, set a dummy session cookie so user can proceed
       const res = NextResponse.json({ ok: true, note: "Dev mode login" });
       res.cookies.set("sb-access-token", "dev_token", {
-        path: "/",
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        partitioned: true,
+        ...baseCookieOptions,
         maxAge: 86400 * 7,
       });
       return res;
@@ -37,11 +42,7 @@ export async function POST(req) {
 
     const res = NextResponse.json({ ok: true, user: data.user.email });
     res.cookies.set("sb-access-token", data.session.access_token, {
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      partitioned: true,
+      ...baseCookieOptions,
       maxAge: data.session.expires_in || 86400 * 7,
     });
 

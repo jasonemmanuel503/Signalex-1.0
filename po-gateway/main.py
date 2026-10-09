@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import time
+import random
 import asyncio
 import logging
 from typing import Literal, Optional, List
@@ -39,12 +40,24 @@ logging.basicConfig(
 logger = logging.getLogger("po_gateway")
 
 # Environment Configurations
+SIGNALEX_ENV = os.getenv("SIGNALEX_ENV", "development").lower()
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "dev_internal_token_signalex_2026")
+
+if SIGNALEX_ENV == "production":
+    if not INTERNAL_API_TOKEN or INTERNAL_API_TOKEN == "dev_internal_token_signalex_2026":
+        raise RuntimeError(
+            "[SIGNALEX_ENV=production] Startup aborted: INTERNAL_API_TOKEN is missing, empty, or set to the default dev token."
+        )
+else:
+    if not INTERNAL_API_TOKEN or INTERNAL_API_TOKEN == "dev_internal_token_signalex_2026":
+        logger.warning(
+            "[SECURITY WARNING] Running with default or unconfigured INTERNAL_API_TOKEN in non-production mode."
+        )
 USE_FAKE_ADAPTER = os.getenv("PO_USE_FAKE_ADAPTER", "false").lower() in ("true", "1", "yes")
 PO_SESSION = os.getenv("PO_SESSION", "")
 PO_UID = int(os.getenv("PO_UID", "0") or 0)
-PO_REAL_SESSION = os.getenv("PO_REAL_SESSION") or PO_SESSION
-PO_REAL_UID = int(os.getenv("PO_REAL_UID", "0") or PO_UID or 0)
+PO_REAL_SESSION = os.getenv("PO_REAL_SESSION", "")
+PO_REAL_UID = int(os.getenv("PO_REAL_UID", "0") or 0)
 PO_REGION = os.getenv("PO_REGION", "DEMO")
 DATA_DIR = os.getenv("DATA_DIR", "../data")
 
@@ -59,16 +72,23 @@ kill_switch_engaged = False
 def get_adapter() -> PocketOptionAdapter:
     global adapter
     if adapter is None:
+        has_real_config = bool(
+            PO_REAL_SESSION and PO_REAL_SESSION.strip() and
+            PO_REAL_UID and
+            (PO_REAL_SESSION != PO_SESSION or PO_REAL_UID != PO_UID)
+        )
         if USE_FAKE_ADAPTER:
             logger.info("Initializing FakePocketOptionAdapter for deterministic testing.")
-            adapter = FakePocketOptionAdapter()
+            adapter = FakePocketOptionAdapter(
+                real_configured=has_real_config
+            )
         else:
             logger.info("Initializing PocketOptionSDKAdapter with real pocket-option SDK.")
             adapter = PocketOptionSDKAdapter(
                 session=PO_SESSION,
                 uid=PO_UID,
-                real_session=PO_REAL_SESSION,
-                real_uid=PO_REAL_UID,
+                real_session=PO_REAL_SESSION if has_real_config else None,
+                real_uid=PO_REAL_UID if has_real_config else None,
                 region_name=PO_REGION,
             )
     return adapter
@@ -148,17 +168,19 @@ async def get_health(x_internal_token: Optional[str] = Header(None)):
     verify_internal_token(x_internal_token)
     ad = get_adapter()
     now = time.time()
-    last_msg = ad.get_last_message_at()
+    last_msg = ad.get_last_message_at("demo")
     age = max(0.0, now - last_msg) if last_msg > 0 else 999999.0
+    accounts = await ad.get_accounts_status()
 
     return {
         "status": "ok",
-        "connected": ad.is_connected(),
-        "session": ad.get_session_status(),
+        "connected": ad.is_connected("demo"),
+        "session": ad.get_session_status("demo"),
         "last_message_age_secs": round(age, 2),
         "version": "0.4.0",
         "adapter": "fake" if USE_FAKE_ADAPTER else "sdk",
         "kill_active": kill_switch_engaged,
+        "accounts": accounts,
     }
 
 # ── Assets Endpoint ──────────────────────────────────────────────────────────
@@ -253,10 +275,10 @@ async def place_order(
         )
 
     # 4. Connection & Session validation
-    if not ad.is_connected():
-        raise HTTPException(status_code=503, detail="Pocket Option gateway is not connected to broker")
-    if ad.get_session_status() != "valid":
-        raise HTTPException(status_code=503, detail=f"Broker session is {ad.get_session_status()}")
+    if not ad.is_connected(req.account):
+        raise HTTPException(status_code=503, detail=f"Pocket Option gateway is not connected on {req.account} account")
+    if ad.get_session_status(req.account) != "valid":
+        raise HTTPException(status_code=503, detail=f"Broker {req.account} session is {ad.get_session_status(req.account)}")
 
     # 5. Asset availability & Payout floor validation
     assets = await ad.get_assets()
@@ -338,6 +360,142 @@ async def place_order(
         "payout_pct": broker_res.payout_pct,
         "latency_ms": latency_ms,
         "slippage": slippage,
+    }
+
+# ── Demo Test Trade Endpoint ────────────────────────────────────────────────
+class TestTradeRequest(BaseModel):
+    pair: Optional[str] = "EURUSD"
+    direction: Optional[Literal["CALL", "PUT"]] = "CALL"
+    account: Optional[str] = "demo"
+    idempotency_key: Optional[str] = None
+
+@app.post("/test-trade")
+async def execute_test_trade(
+    background_tasks: BackgroundTasks,
+    req: Optional[TestTradeRequest] = None,
+    x_internal_token: Optional[str] = Header(None)
+):
+    verify_internal_token(x_internal_token)
+    global kill_switch_engaged
+    ad = get_adapter()
+
+    # 1. Strictly reject any account other than "demo"
+    req_account = (req.account if req and req.account else "demo").lower()
+    if req_account != "demo":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test trade is strictly demo-only. Rejected account: {req_account}"
+        )
+
+    # 2. Kill switch check
+    if kill_switch_engaged:
+        raise HTTPException(status_code=400, detail="Kill switch is active. All order placement is blocked.")
+
+    # 3. Connection & Session validation on demo
+    if not ad.is_connected("demo"):
+        raise HTTPException(status_code=503, detail="Pocket Option gateway is not connected on demo account")
+    if ad.get_session_status("demo") != "valid":
+        raise HTTPException(status_code=503, detail=f"Broker demo session is {ad.get_session_status('demo')}")
+
+    # 4. Parameters fixed for demo test trade
+    stake = 1.0
+    expiry_secs = 60
+    if stake > MAX_STAKE_HARD_CAP:
+        raise HTTPException(status_code=400, detail=f"Stake {stake} exceeds gateway hard cap ({MAX_STAKE_HARD_CAP})")
+
+    # 5. Asset resolution: requested pair defaulting to EURUSD, falling back to first open asset with payout >= MIN_PAYOUT_PCT
+    assets = await ad.get_assets()
+    requested_pair = (req.pair if req and req.pair else "EURUSD").strip()
+    target_asset = next((a for a in assets if a.pair == requested_pair and a.open and a.payout_pct >= MIN_PAYOUT_PCT), None)
+    if not target_asset:
+        target_asset = next((a for a in assets if a.open and a.payout_pct >= MIN_PAYOUT_PCT), None)
+
+    if not target_asset:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No open asset with payout >= {MIN_PAYOUT_PCT}% available for test trade"
+        )
+
+    pair = target_asset.pair
+    direction = (req.direction if req and req.direction else "CALL")
+
+    # 6. Max concurrent orders validation
+    active_count = await storage.get_active_orders_count()
+    if active_count >= MAX_CONCURRENT_ORDERS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Max concurrent orders reached ({active_count}/{MAX_CONCURRENT_ORDERS})"
+        )
+
+    # 7. Idempotency reservation
+    idemp_key = (req.idempotency_key if req and req.idempotency_key else None) or f"test_trade_{int(time.time()*1000)}_{random.randint(100, 999)}"
+    inserted = await storage.record_pending_order(
+        idempotency_key=idemp_key,
+        account="demo",
+        pair=pair,
+        direction=direction,
+        stake=stake,
+        expiry_secs=expiry_secs,
+        payout_pct=target_asset.payout_pct,
+        signal_id="TEST_TRADE",
+    )
+    if not inserted:
+        existing = await storage.get_order_by_idempotency_key(idemp_key)
+        return {
+            "status": "already_processed",
+            "order": existing
+        }
+
+    # 8. Send to broker
+    t0 = time.time()
+    try:
+        broker_res = await ad.place_order(
+            pair=pair,
+            direction=direction,
+            stake=stake,
+            expiry_secs=expiry_secs,
+            account="demo",
+        )
+    except Exception as e:
+        err_msg = str(e)
+        logger.error(f"Failed to place test trade {idemp_key}: {err_msg}")
+        await storage.mark_order_failed(idemp_key, err_msg)
+        raise HTTPException(status_code=502, detail=f"Broker rejected test trade: {err_msg}")
+
+    latency_ms = int((time.time() - t0) * 1000)
+
+    # 9. Mark confirmed in ledger
+    await storage.mark_order_confirmed(
+        idempotency_key=idemp_key,
+        deal_id=broker_res.deal_id,
+        entry_price=broker_res.entry_price,
+        payout_pct=broker_res.payout_pct,
+        latency_ms=latency_ms,
+        slippage=0.0,
+    )
+
+    # 10. Background task to track deal closing
+    background_tasks.add_task(track_and_update_deal, broker_res.deal_id, expiry_secs)
+
+    return {
+        "status": "accepted",
+        "order_id": broker_res.deal_id,
+        "deal_id": broker_res.deal_id,
+        "pair": pair,
+        "account": "demo",
+        "direction": direction,
+        "stake": stake,
+        "expiry_secs": expiry_secs,
+        "entry_price": broker_res.entry_price,
+        "payout_pct": broker_res.payout_pct,
+        "latency_ms": latency_ms,
+        "slippage": 0.0,
+        "lifecycle": {
+            "sent": True,
+            "confirmed": True,
+            "open": True,
+            "closed": False,
+        }
     }
 
 # ── Order Status Endpoint ────────────────────────────────────────────────────
