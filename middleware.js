@@ -9,6 +9,7 @@ export async function middleware(req) {
     pathname.startsWith("/static") ||
     pathname === "/favicon.ico" ||
     pathname === "/login" ||
+    pathname === "/api/auth/login" ||
     pathname === "/api/public-health"
   ) {
     return NextResponse.next();

@@ -20,6 +20,9 @@ export async function POST(req) {
       res.cookies.set("sb-access-token", "dev_token", {
         path: "/",
         httpOnly: true,
+        secure: true,
+        sameSite: "none",
+        partitioned: true,
         maxAge: 86400 * 7,
       });
       return res;
@@ -36,8 +39,10 @@ export async function POST(req) {
     res.cookies.set("sb-access-token", data.session.access_token, {
       path: "/",
       httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      partitioned: true,
       maxAge: data.session.expires_in || 86400 * 7,
-      sameSite: "lax",
     });
 
     return res;
