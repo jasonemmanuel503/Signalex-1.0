@@ -25,9 +25,16 @@ except ImportError:
     from po_adapter import PocketOptionSDKAdapter
     from storage import LocalStorage
 
+os.makedirs(os.getenv("DATA_DIR", "../data"), exist_ok=True)
+_log_file = os.path.join(os.getenv("DATA_DIR", "../data"), "po-gateway.log")
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_log_file)
+    ]
 )
 logger = logging.getLogger("po_gateway")
 

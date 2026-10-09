@@ -91,9 +91,13 @@ function launchProcess(name, command, args, cwd, customEnv = {}) {
   activeProcesses.push({ name, proc });
 
   proc.on('exit', (code, signal) => {
+    const exitMsg = `${new Date().toISOString()} [start-all] ${name} exited with code ${code} (signal: ${signal})\n`;
     console.log(`[start-all] ${name} exited with code ${code} (signal: ${signal})`);
+    try { fs.appendFileSync(path.resolve(rootDir, 'data/launcher.log'), exitMsg); } catch {}
     if (!isTerminating && name !== 'Next.js') {
+      const restartMsg = `${new Date().toISOString()} [start-all] Auto-restarting ${name} in 2 seconds...\n`;
       console.log(`[start-all] Auto-restarting ${name} in 2 seconds...`);
+      try { fs.appendFileSync(path.resolve(rootDir, 'data/launcher.log'), restartMsg); } catch {}
       setTimeout(() => {
         if (!isTerminating) {
           launchProcess(name, command, args, cwd, customEnv);
