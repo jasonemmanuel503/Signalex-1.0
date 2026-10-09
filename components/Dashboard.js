@@ -31,6 +31,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import styles from "./Dashboard.module.css";
+import PauseBanner from "./PauseBanner.js";
+import ControlBar from "./ControlBar.js";
+import PendingTradeCard from "./PendingTradeCard.js";
+import TradesTable from "./TradesTable.js";
+import StatsPanel from "./StatsPanel.js";
+import SettingsDrawer from "./SettingsDrawer.js";
 
 const LANG_KEY = "signalex_lang_v1";
 
@@ -62,6 +68,8 @@ const T = {
     ready:             "READY",
     langBtn:           "FR",
     tabDashboard:      "Dashboard",
+    tabTrades:         "Trades",
+    tabStats:          "Stats",
     tabSession:        "Session",
     tabConfigure:      "Configure",
     tabTelegram:       "Telegram",
@@ -191,6 +199,8 @@ const T = {
     ready:             "PRÊT",
     langBtn:           "EN",
     tabDashboard:      "Tableau de bord",
+    tabTrades:         "Trades",
+    tabStats:          "Statistiques",
     tabSession:        "Session",
     tabConfigure:      "Configurer",
     tabTelegram:       "Telegram",
@@ -353,7 +363,7 @@ function buildPreview(sig, rank, total) {
   ].filter((l) => l !== null).join("\n");
 }
 
-const TAB_KEYS = ["tabDashboard", "tabSession", "tabConfigure", "tabTelegram", "tabGuide"];
+const TAB_KEYS = ["tabDashboard", "tabTrades", "tabStats", "tabSession", "tabConfigure", "tabTelegram", "tabGuide"];
 
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function Dashboard() {
@@ -425,6 +435,46 @@ export default function Dashboard() {
   const [healthStatus,     setHealthStatus]    = useState(null);   // GET /api/health-monitor response
   // [KILL-SWITCH-UI] Active kill-switch pauses — populated from API response killSwitchPauses[]
   const [killSwitchPauses, setKillSwitchPauses] = useState([]);
+
+  // ── SIGNALEX V10 Pocket Option Orchestrator & Control State ──
+  const [controlState, setControlState] = useState(null);
+  const [pendingList,  setPendingList]  = useState([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const fetchControl = useCallback(async () => {
+    try {
+      const res = await fetch("/api/control");
+      if (res.ok) {
+        const data = await res.json();
+        setControlState(data);
+      }
+    } catch {
+      // Silently fail safely
+    }
+  }, []);
+
+  const fetchPending = useCallback(async () => {
+    try {
+      const res = await fetch("/api/pending");
+      if (res.ok) {
+        const data = await res.json();
+        setPendingList(data.pending || []);
+      }
+    } catch {
+      // Silently fail safely
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchControl();
+    fetchPending();
+    const ctrlInterval = setInterval(fetchControl, 2500);
+    const pendInterval = setInterval(fetchPending, 2000);
+    return () => {
+      clearInterval(ctrlInterval);
+      clearInterval(pendInterval);
+    };
+  }, [fetchControl, fetchPending]);
 
   const liveCountTm   = useRef(null);
   const logRef        = useRef(null);
@@ -837,14 +887,38 @@ export default function Dashboard() {
       <div className={styles.app}>
 
         {/* ── HEADER ── */}
-        <header className={styles.header}>
+        <header
+          className={styles.header}
+          style={{
+            borderColor: controlState?.account === "real" ? "rgba(209,52,56,0.4)" : "rgba(0,120,212,0.3)",
+            background: controlState?.account === "real" ? "rgba(209,52,56,0.06)" : "transparent",
+            borderRadius: 10,
+            padding: "12px 18px",
+            transition: "all 0.3s ease",
+          }}
+        >
           <div className={styles.logo}>
             <div className={styles.logoMark}>
               <span className={styles.logoMarkText}>SX</span>
             </div>
             <div>
               <div className={styles.logoName}>
-                SIGNALEX <span className={styles.logoVersion}>V8.0</span>
+                SIGNALEX <span className={styles.logoVersion}>V10.0</span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: 1,
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    background: controlState?.account === "real" ? "#d13438" : "#0078d4",
+                    color: "#fff",
+                    boxShadow: controlState?.account === "real" ? "0 0 10px rgba(209,52,56,0.4)" : "0 0 10px rgba(0,120,212,0.3)",
+                    marginLeft: 6,
+                  }}
+                >
+                  {controlState?.account === "real" ? "🔥 REAL" : "🛡️ DEMO"}
+                </span>
               </div>
               {/* Suppress hydration warning on sub-line — it uses t.appSub which differs by lang */}
               <div className={styles.logoSub} suppressHydrationWarning>{mounted ? t.appSub : T.en.appSub}</div>
@@ -959,6 +1033,38 @@ export default function Dashboard() {
         {/* ════ DASHBOARD ════ */}
         {tab === 0 && (
           <div className={styles.tabContent}>
+            {/* Top Pause Banner when paused */}
+            {controlState?.trading_paused && (
+              <PauseBanner
+                pauseReason={controlState?.pause_reason}
+                onResume={(newState) => {
+                  setControlState((prev) => ({
+                    ...prev,
+                    ...newState,
+                    trading_paused: false,
+                    pause_reason: null,
+                  }));
+                }}
+              />
+            )}
+
+            {/* Control Bar (Mode Buttons, Account Switcher, Kill Switch, Status Chips) */}
+            <ControlBar
+              controlState={controlState}
+              onStateUpdate={(newState) => {
+                setControlState((prev) => ({ ...prev, ...newState }));
+              }}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+
+            {/* Pending confirmation card (SEMI mode) */}
+            {pendingList && pendingList.length > 0 && (
+              <PendingTradeCard
+                pendingList={pendingList}
+                onRefresh={fetchPending}
+              />
+            )}
+
             {/* Stats row */}
             {scanMeta && (
               <div className={styles.statsRow}>
@@ -1479,8 +1585,22 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════ SESSION ════ */}
+        {/* ════ TRADES ════ */}
         {tab === 1 && (
+          <div className={styles.tabContent}>
+            <TradesTable />
+          </div>
+        )}
+
+        {/* ════ STATS ════ */}
+        {tab === 2 && (
+          <div className={styles.tabContent}>
+            <StatsPanel />
+          </div>
+        )}
+
+        {/* ════ SESSION ════ */}
+        {tab === 3 && (
           <div className={styles.twoCol}>
             <div className={styles.card2}>
               <div className={styles.card2Head}>
@@ -1510,7 +1630,7 @@ export default function Dashboard() {
         )}
 
         {/* ════ CONFIGURE ════ */}
-        {tab === 2 && (
+        {tab === 4 && (
           <div className={styles.configGrid}>
             {/* Backend status */}
             <div className={styles.card2}>
@@ -1788,7 +1908,7 @@ export default function Dashboard() {
         )}
 
         {/* ════ TELEGRAM ════ */}
-        {tab === 3 && (
+        {tab === 5 && (
           <div className={styles.twoCol}>
             <div className={styles.card2}>
               <div className={styles.card2Head}><span suppressHydrationWarning>{t.tgStatus}</span></div>
@@ -1817,7 +1937,7 @@ export default function Dashboard() {
         )}
 
         {/* ════ GUIDE ════ */}
-        {tab === 4 && (
+        {tab === 6 && (
           <div className={styles.twoCol}>
             <div className={styles.card2}>
               <div className={styles.card2Head}><span suppressHydrationWarning>{t.quickStart}</span></div>
@@ -1846,6 +1966,19 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Settings Drawer */}
+        <SettingsDrawer
+          isOpen={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          currentSettings={controlState?.settings}
+          onSettingsSaved={(updatedSettings) => {
+            setControlState((prev) => ({
+              ...prev,
+              settings: updatedSettings,
+            }));
+          }}
+        />
 
       </div>
     </div>

@@ -1,30 +1,102 @@
 import { NextResponse } from "next/server";
 import { orchestrator } from "../../../lib/trading/orchestrator.js";
-import { updateAppSettings, getAppSettings, writeAuditLog } from "../../../lib/store/index.js";
+import { updateAppSettings, getAppSettings, writeAuditLog, getTradeHistory } from "../../../lib/store/index.js";
 
 const PO_GATEWAY_URL = process.env.PO_GATEWAY_URL || "http://127.0.0.1:8002";
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8001";
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || "dev_internal_token_signalex_2026";
 
 export async function GET(req) {
   try {
     const state = orchestrator.getState();
 
-    // Check PO Gateway health
-    let gateway = { connected: false, session: "unknown" };
+    // Check PO Gateway health & balance
+    let gateway = { connected: false, session: "unknown", last_message_age_secs: null };
+    let balance = { demo: 10000.0, real: 0.0, current: 10000.0 };
     try {
       const res = await fetch(`${PO_GATEWAY_URL}/health`, {
         headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
         signal: AbortSignal.timeout(3000),
       });
-      if (res.ok) gateway = await res.json();
+      if (res.ok) {
+        gateway = await res.json();
+      }
     } catch {
-      gateway = { connected: false, session: "unreachable" };
+      gateway = { connected: false, session: "unreachable", last_message_age_secs: null };
     }
+
+    if (gateway.connected) {
+      try {
+        const balRes = await fetch(`${PO_GATEWAY_URL}/balance?account=${state.account || "demo"}`, {
+          headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
+          signal: AbortSignal.timeout(2000),
+        });
+        if (balRes.ok) {
+          const balData = await balRes.json();
+          balance.current = Number(balData.balance ?? 10000.0);
+          if (state.account === "real") {
+            balance.real = balance.current;
+          } else {
+            balance.demo = balance.current;
+          }
+        }
+      } catch {
+        // Fall back to stored/default balance
+      }
+    }
+
+    // Check Deriv / python-backend health
+    let deriv = { connected: false, status: "unknown" };
+    try {
+      const derivRes = await fetch(`${PYTHON_BACKEND_URL}/health`, {
+        headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
+        signal: AbortSignal.timeout(2000),
+      });
+      if (derivRes.ok) {
+        const dData = await derivRes.json();
+        deriv = { connected: true, status: dData.status || "ok" };
+      }
+    } catch {
+      deriv = { connected: false, status: "unreachable" };
+    }
+
+    // Compute today's performance metrics
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const allTrades = getTradeHistory(200);
+    const todayTrades = allTrades.filter(
+      (t) => (t.account === state.account || !state.account) && (t.sent_at || "").startsWith(todayStr)
+    );
+    let todayProfit = 0;
+    let todayWins = 0;
+    let todayLosses = 0;
+    for (const t of todayTrades) {
+      if (t.result === "WIN") {
+        todayWins++;
+        todayProfit += Number(t.profit || 0);
+      } else if (t.result === "LOSS") {
+        todayLosses++;
+        todayProfit += Number(t.profit || 0);
+      }
+    }
+
+    const currentLossStreak =
+      state.consecutive_losses?.[state.account || "demo"] ??
+      orchestrator.recalcLossStreak(state.account || "demo");
 
     return NextResponse.json({
       ok: true,
       ...state,
       gateway,
+      deriv,
+      balance,
+      loss_streak: currentLossStreak,
+      today: {
+        tradesCount: todayTrades.length,
+        maxTrades: state.settings?.max_trades_per_day || 30,
+        netProfit: Number(todayProfit.toFixed(2)),
+        wins: todayWins,
+        losses: todayLosses,
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

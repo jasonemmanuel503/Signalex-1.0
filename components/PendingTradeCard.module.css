@@ -1,0 +1,207 @@
+/* ═══════════════════════════════════════════════════════════════════
+   SIGNALEX V10 — Pending Trade Card Styles (SEMI Mode)
+   ═══════════════════════════════════════════════════════════════════ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.headingTitle {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #ffaa44;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card {
+  background: rgba(22, 33, 62, 0.9);
+  border: 1px solid rgba(255, 170, 68, 0.4);
+  border-left: 5px solid #ffaa44;
+  border-radius: 10px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: glowIn 0.3s ease-out;
+}
+
+@keyframes glowIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pairBadge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pairName {
+  font-size: 17px;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.directionChip {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.dirBuy {
+  background: rgba(16, 124, 16, 0.25);
+  border: 1px solid #54b054;
+  color: #54b054;
+}
+
+.dirSell {
+  background: rgba(209, 52, 56, 0.25);
+  border: 1px solid #f1707b;
+  color: #f1707b;
+}
+
+.timerContainer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 170, 68, 0.3);
+}
+
+.timerLabel {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.timerValue {
+  font-size: 15px;
+  font-weight: 900;
+  font-family: var(--font-data, monospace);
+  color: #ffaa44;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.metricItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.metricLabel {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metricVal {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-data, monospace);
+  color: #ffffff;
+}
+
+.metricBreakEven {
+  color: #5ab0f7;
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.executeBtn {
+  flex: 1;
+  min-height: 48px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+  background: #107c10;
+  border: 1px solid #54b054;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.18s ease;
+  box-shadow: 0 4px 14px rgba(16, 124, 16, 0.4);
+}
+
+.executeBtn:hover:not(:disabled) {
+  background: #159415;
+  transform: translateY(-1px);
+}
+
+.executeBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.skipBtn {
+  min-height: 48px;
+  padding: 10px 22px;
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.skipBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.statusCard {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}

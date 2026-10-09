@@ -1,0 +1,386 @@
+/* ═══════════════════════════════════════════════════════════════════
+   SIGNALEX V10 — Control Bar Styles
+   ═══════════════════════════════════════════════════════════════════ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  margin-bottom: 22px;
+  background: rgba(22, 33, 62, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.28);
+}
+
+.topRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+/* Account Switcher */
+.accountGroup {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.accountBtn {
+  min-height: 42px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  transition: all 0.2s ease;
+}
+
+.accountBtnActiveDemo {
+  background: #0078d4;
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(0, 120, 212, 0.45);
+}
+
+.accountBtnActiveReal {
+  background: #d13438;
+  color: #ffffff;
+  box-shadow: 0 0 14px rgba(209, 52, 56, 0.55);
+}
+
+/* Mode Buttons */
+.modeGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.modeBtn {
+  min-height: 42px;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.modeBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
+.modeBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.modeBtnActiveOFF {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.modeBtnActiveSIGNALS {
+  background: rgba(0, 120, 212, 0.25);
+  border-color: #0078d4;
+  color: #5ab0f7;
+  font-weight: 800;
+  box-shadow: 0 0 10px rgba(0, 120, 212, 0.3);
+}
+
+.modeBtnActiveSEMI {
+  background: rgba(255, 170, 68, 0.22);
+  border-color: #ffaa44;
+  color: #ffaa44;
+  font-weight: 800;
+  box-shadow: 0 0 12px rgba(255, 170, 68, 0.35);
+}
+
+.modeBtnActiveAUTO {
+  background: rgba(16, 124, 16, 0.28);
+  border-color: #54b054;
+  color: #6ed06e;
+  font-weight: 800;
+  box-shadow: 0 0 14px rgba(84, 176, 84, 0.4);
+}
+
+/* Right Actions (Kill & Settings) */
+.actionGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.killBtn {
+  min-height: 42px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #ffffff;
+  background: #d13438;
+  border: 1px solid #f1707b;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.18s ease;
+  box-shadow: 0 2px 12px rgba(209, 52, 56, 0.45);
+}
+
+.killBtn:hover {
+  background: #b92b30;
+  transform: translateY(-1px);
+}
+
+.settingsBtn {
+  min-height: 42px;
+  min-width: 42px;
+  padding: 8px 14px;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+}
+
+.settingsBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* One-line Mode Description */
+.modeDescRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.modeDesc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.statusNotice {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Status Chips Row */
+.chipsRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 16px;
+  font-size: 11px;
+  font-family: var(--font-data, monospace);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.chipSuccess {
+  background: rgba(16, 124, 16, 0.15);
+  border-color: rgba(84, 176, 84, 0.35);
+  color: #54b054;
+}
+
+.chipWarning {
+  background: rgba(255, 170, 68, 0.14);
+  border-color: rgba(255, 170, 68, 0.35);
+  color: #ffaa44;
+}
+
+.chipError {
+  background: rgba(209, 52, 56, 0.16);
+  border-color: rgba(241, 112, 123, 0.35);
+  color: #f1707b;
+}
+
+.chipAccent {
+  background: rgba(0, 120, 212, 0.14);
+  border-color: rgba(0, 120, 212, 0.35);
+  color: #5ab0f7;
+}
+
+.chipHighlight {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* Modals */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 440px;
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: popIn 0.2s ease-out;
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 800;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modalBody {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.5;
+}
+
+.modalInput {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #ffffff;
+  outline: none;
+}
+
+.modalInput:focus {
+  border-color: #d13438;
+}
+
+.modalActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.modalBtnCancel {
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+}
+
+.modalBtnDanger {
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #d13438;
+  border: 1px solid #f1707b;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.modalBtnDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modalBtnSuccess {
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #107c10;
+  border: 1px solid #54b054;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.toast {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: rgba(209, 52, 56, 0.9);
+  color: #ffffff;
+  border: 1px solid #f1707b;
+  margin-top: 6px;
+}
+
+@media (max-width: 768px) {
+  .topRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .accountGroup, .modeGroup, .actionGroup {
+    width: 100%;
+  }
+  .accountBtn, .modeBtn, .killBtn {
+    flex: 1;
+    text-align: center;
+  }
+}

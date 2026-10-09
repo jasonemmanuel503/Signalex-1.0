@@ -35,7 +35,7 @@ async function testOrchestrator() {
   const killState = orchestrator.getState();
   assert.strictEqual(killState.kill_active, true);
   assert.strictEqual(killState.trading_paused, true);
-  assert.strictEqual(killState.mode, "SIGNALS", "Kill switch must drop mode to SIGNALS");
+  assert.strictEqual(killState.mode, "OFF", "Kill switch must set mode to OFF");
 
   // While killed, switching to AUTO or SEMI must be rejected
   await assert.rejects(
