@@ -246,29 +246,65 @@ async def test_disconnect_marks_session_disconnected():
 
 @pytest.mark.asyncio
 async def test_stale_client_disconnect_ignored():
-    from po_adapter import _AccountConnection
+    from po_adapter import PocketOptionSDKAdapter, _AccountConnection
+
+    adapter = PocketOptionSDKAdapter("sess_123", 1001)
     conn = _AccountConnection(name="demo", session="sess_123", uid=1001, is_demo=1)
+
+    class FakeClient:
+        def __init__(self):
+            self.handlers = {}
+
+            class OnNamespace:
+                def __init__(self, parent):
+                    self.parent = parent
+
+                def connect(self, fn):
+                    self.parent.handlers["connect"] = fn
+                    return fn
+
+                def success_auth(self, fn):
+                    self.parent.handlers["success_auth"] = fn
+                    return fn
+
+                def disconnect(self, fn):
+                    self.parent.handlers["disconnect"] = fn
+                    return fn
+
+                def balance_success_update(self, fn):
+                    self.parent.handlers["balance_success_update"] = fn
+                    return fn
+
+            self.on = OnNamespace(self)
+
+    client_a = FakeClient()
+    client_b = FakeClient()
+
+    # Build conn with client_a and setup connection events
+    conn.client = client_a
+    adapter._setup_connection_events(conn, is_primary_market_feed=False)
+
+    disconnect_handler_a = client_a.handlers.get("disconnect")
+    assert disconnect_handler_a is not None, "Real _setup_connection_events must register disconnect handler"
+
+    # Replace conn.client with client_b
+    conn.client = client_b
     conn.connected = True
     conn.session_status = "valid"
     conn.balance = 500.0
 
-    class DummyClient:
-        pass
-
-    active_client = DummyClient()
-    stale_client = DummyClient()
-    conn.client = active_client
-
-    def stale_on_disconnect():
-        if conn.client is not stale_client:
-            return
-        conn.connected = False
-        conn.session_status = "disconnected"
-
-    stale_on_disconnect()
+    # 1. Invoke captured client_A disconnect handler -> conn must be unchanged
+    await disconnect_handler_a()
     assert conn.connected is True
     assert conn.session_status == "valid"
     assert conn.balance == 500.0
+
+    # 2. Invoke handler when conn.client is client_A -> conn state DOES change
+    conn.client = client_a
+    await disconnect_handler_a()
+    assert conn.connected is False
+    assert conn.session_status == "disconnected"
+    assert conn.balance is None
 
 
 @pytest.mark.asyncio
@@ -319,7 +355,16 @@ async def test_network_outage_never_expires(monkeypatch):
             assert res.json()["session"] != "expired"
 
         ad.simulate_network_up()
-        await ad.check_watchdog()
+        recovered = False
+        for _ in range(20):
+            await asyncio.sleep(0.025)
+            await ad.check_watchdog()
+            res = await client.get("/health", headers=HEADERS)
+            if res.json()["session"] == "valid":
+                recovered = True
+                break
+
+        assert recovered is True, "Watchdog must automatically recover connection to valid without manual action"
         res = await client.get("/health", headers=HEADERS)
         assert res.json()["session"] == "valid"
         assert res.json()["connected"] is True
@@ -458,4 +503,81 @@ async def test_event_tap_logs_unknown_once_and_chains_original(caplog):
     assert len(calls) == 1003
     foobar_warnings = [r for r in caplog.records if "Discovered unknown broker event: FooBar" in r.message]
     assert len(foobar_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_set_session_serialized():
+    """G6: Two concurrent set_session calls run serially under the lock without interleaving."""
+    from po_adapter import PocketOptionSDKAdapter
+    adapter = PocketOptionSDKAdapter(session="init_sess", uid=100)
+
+    order_log = []
+
+    async def fake_reconnect_locked(conn):
+        current_sess = conn.session
+        order_log.append(f"start_{current_sess}")
+        await asyncio.sleep(0.05)
+        order_log.append(f"end_{current_sess}")
+        conn.session_status = "valid"
+        return True
+
+    adapter._reconnect_locked = fake_reconnect_locked
+
+    task1 = asyncio.create_task(adapter.set_session("sess_A", 101))
+    task2 = asyncio.create_task(adapter.set_session("sess_B", 102))
+
+    res1, res2 = await asyncio.gather(task1, task2)
+    assert res1 is True and res2 is True
+    # The two calls must run serially: start_X -> end_X -> start_Y -> end_Y
+    assert len(order_log) == 4
+    first_sess = order_log[0].replace("start_", "")
+    assert order_log[1] == f"end_{first_sess}"
+    second_sess = order_log[2].replace("start_", "")
+    assert order_log[3] == f"end_{second_sess}"
+    assert {first_sess, second_sess} == {"sess_A", "sess_B"}
+
+
+@pytest.mark.asyncio
+async def test_auth_reject_single_count_on_watchdog(monkeypatch):
+    """G7: One reject event followed by check_watchdog with connected socket counts exactly 1 failure."""
+    from po_adapter import PocketOptionSDKAdapter, _AccountConnection
+    import time
+
+    adapter = PocketOptionSDKAdapter(session="sess_test", uid=100)
+    conn = _AccountConnection(name="demo", session="sess_test", uid=100, is_demo=1)
+    adapter._demo_conn = conn
+
+    class MockSio:
+        def __init__(self):
+            self.connected = True
+            self.handlers = {"/": {}}
+
+        def on(self, event, handler):
+            self.handlers["/"][event] = handler
+
+    class MockClient:
+        def __init__(self):
+            self.sio = MockSio()
+            self.is_authorized = False
+
+    client = MockClient()
+    conn.client = client
+    conn.session_status = "connecting"
+    conn.connecting_since = time.time() - 30.0  # past auth timeout (15s)
+
+    # Tap receives NotAuthorized reject
+    adapter._install_event_tap(conn, client)
+    tap = client.sio.handlers["/"]["*"]
+
+    # Trigger tap with NotAuthorized
+    await tap("NotAuthorized")
+    assert conn.auth_fail_count == 1
+
+    # Run check_watchdog while socket is still "connected"
+    monkeypatch.setenv("PO_AUTH_TIMEOUT", "5")
+    await adapter.check_watchdog()
+
+    # Must still be exactly 1, not 2
+    assert conn.auth_fail_count == 1, f"Expected 1 auth failure, got {conn.auth_fail_count}"
+
 

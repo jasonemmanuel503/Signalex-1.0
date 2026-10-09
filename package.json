@@ -9,7 +9,9 @@
     "lint": "next lint",
     "setup:python": "node scripts/setup-python.js",
     "check:python": "node scripts/setup-python.js --check",
-    "setup:python:dev": "node scripts/setup-python.js --dev"
+    "setup:python:dev": "node scripts/setup-python.js --dev",
+    "check:secrets": "node scripts/check-no-secrets.js",
+    "test:session-monitor": "node scripts/test_session_monitor.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",

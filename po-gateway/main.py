@@ -383,17 +383,6 @@ async def get_prices(x_internal_token: Optional[str] = Header(None)):
             prices.append(price_info)
     return prices
 
-# ── Balance Endpoint ─────────────────────────────────────────────────────────
-@app.get("/balance")
-async def get_balance(
-    account: Literal["demo", "real"] = Query(default="demo"),
-    x_internal_token: Optional[str] = Header(None)
-):
-    verify_internal_token(x_internal_token)
-    ad = get_adapter()
-    bal = await ad.get_balance(account)
-    return {"account": account, "balance": bal}
-
 # ── Orders Endpoint ──────────────────────────────────────────────────────────
 VALID_EXPIRIES = {60, 120, 180, 300, 600, 900, 1800}
 

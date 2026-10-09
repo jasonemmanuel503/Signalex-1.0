@@ -172,12 +172,6 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
 
     def simulate_network_up(self) -> None:
         self._network_down = False
-        self._demo_connected = True
-        self._demo_session_status = "valid"
-        self._demo_balance = self._initial_demo_balance
-        self._demo_last_message_at = time.time()
-        self._auth_fail_count = 0
-        self._net_fail_count = 0
 
     def simulate_auth_reject(self, enabled: bool = True) -> None:
         self._auth_reject_mode = enabled

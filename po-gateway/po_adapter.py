@@ -67,6 +67,7 @@ class _AccountConnection:
         self.next_attempt_at: float = 0.0
         self.generation: int = 0
         self.connecting_since: float = 0.0
+        self.attempt_failed: bool = False
         self.reconnect_lock = asyncio.Lock()
         self._last_net_warn_at = 0.0
 
@@ -163,7 +164,10 @@ class PocketOptionSDKAdapter(PocketOptionAdapter):
 
             if event_str in auth_reject_events:
                 logger.warning(f"PocketOption {conn.name} received auth reject event: {event_str}")
-                conn.auth_fail_count += 1
+                if not conn.attempt_failed:
+                    conn.attempt_failed = True
+                    conn.auth_fail_count += 1
+                conn.connecting_since = 0.0
                 conn.connected = False
                 conn.session_status = "disconnected"
                 conn.balance = None
@@ -254,55 +258,59 @@ class PocketOptionSDKAdapter(PocketOptionAdapter):
                     return
                 conn.last_message_at = time.time()
 
+    async def _reconnect_locked(self, conn: _AccountConnection) -> bool:
+        login_wait = float(os.getenv("PO_LOGIN_WAIT", "15"))
+        from pocket_option import PocketOptionClient
+        from pocket_option.contrib.candles import MemoryCandleStorage
+        from pocket_option.contrib.assets import MemoryAssetsStorage
+        from pocket_option.contrib.deals import MemoryDealsStorage
+
+        conn.generation += 1
+        conn.attempt_failed = False
+        conn.connecting_since = time.time()
+        conn.session_status = "connecting"
+        conn.balance = None
+
+        if conn.client:
+            try:
+                await conn.client.disconnect()
+            except Exception as e:
+                logger.debug(f"Error disconnecting old client for {conn.name}: {e}")
+
+        conn.client = PocketOptionClient(logger=False, reconnection=False)
+        is_primary = (conn.name == "demo")
+        if is_primary:
+            conn.candle_storage = MemoryCandleStorage(conn.client)
+            conn.assets_storage = MemoryAssetsStorage(conn.client)
+        conn.deals_storage = MemoryDealsStorage(conn.client)
+
+        self._setup_connection_events(conn, is_primary_market_feed=is_primary)
+        self._install_event_tap(conn, conn.client)
+
+        region = self._get_region()
+        try:
+            await conn.client.connect(region)
+            self._install_event_tap(conn, conn.client)
+        except Exception as e:
+            logger.warning(f"Connect failed for {conn.name}: {e}")
+            conn.connected = False
+            conn.session_status = "disconnected"
+            conn.net_fail_count += 1
+            return False
+
+        wait_steps = int(login_wait * 10)
+        for _ in range(wait_steps):
+            if conn.session_status == "valid":
+                return True
+            if conn.session_status == "expired":
+                return False
+            await asyncio.sleep(0.1)
+
+        return conn.session_status == "valid"
+
     async def reconnect_session(self, conn: _AccountConnection) -> bool:
         async with conn.reconnect_lock:
-            login_wait = float(os.getenv("PO_LOGIN_WAIT", "15"))
-            from pocket_option import PocketOptionClient
-            from pocket_option.contrib.candles import MemoryCandleStorage
-            from pocket_option.contrib.assets import MemoryAssetsStorage
-            from pocket_option.contrib.deals import MemoryDealsStorage
-
-            conn.generation += 1
-            conn.connecting_since = time.time()
-            conn.session_status = "connecting"
-            conn.balance = None
-
-            if conn.client:
-                try:
-                    await conn.client.disconnect()
-                except Exception as e:
-                    logger.debug(f"Error disconnecting old client for {conn.name}: {e}")
-
-            conn.client = PocketOptionClient(logger=False, reconnection=False)
-            is_primary = (conn.name == "demo")
-            if is_primary:
-                conn.candle_storage = MemoryCandleStorage(conn.client)
-                conn.assets_storage = MemoryAssetsStorage(conn.client)
-            conn.deals_storage = MemoryDealsStorage(conn.client)
-
-            self._setup_connection_events(conn, is_primary_market_feed=is_primary)
-            self._install_event_tap(conn, conn.client)
-
-            region = self._get_region()
-            try:
-                await conn.client.connect(region)
-                self._install_event_tap(conn, conn.client)
-            except Exception as e:
-                logger.warning(f"Connect failed for {conn.name}: {e}")
-                conn.connected = False
-                conn.session_status = "disconnected"
-                conn.net_fail_count += 1
-                return False
-
-            wait_steps = int(login_wait * 10)
-            for _ in range(wait_steps):
-                if conn.session_status == "valid":
-                    return True
-                if conn.session_status == "expired":
-                    return False
-                await asyncio.sleep(0.1)
-
-            return conn.session_status == "valid"
+            return await self._reconnect_locked(conn)
 
     async def connect(self) -> None:
         self._running = True
@@ -365,10 +373,13 @@ class PocketOptionSDKAdapter(PocketOptionAdapter):
 
             if conn.session_status == "connecting":
                 if conn.connecting_since > 0 and (now - conn.connecting_since) > (login_wait + 5):
-                    if sio_connected:
-                        conn.auth_fail_count += 1
-                    else:
-                        conn.net_fail_count += 1
+                    if not conn.attempt_failed:
+                        conn.attempt_failed = True
+                        if sio_connected:
+                            conn.auth_fail_count += 1
+                        else:
+                            conn.net_fail_count += 1
+                    conn.connecting_since = 0.0
                     conn.connected = False
                     conn.session_status = "disconnected"
                     conn.balance = None
@@ -377,7 +388,10 @@ class PocketOptionSDKAdapter(PocketOptionAdapter):
 
             if sio_connected and not is_authorized:
                 if conn.connecting_since > 0 and (now - conn.connecting_since) > auth_timeout:
-                    conn.auth_fail_count += 1
+                    if not conn.attempt_failed:
+                        conn.attempt_failed = True
+                        conn.auth_fail_count += 1
+                    conn.connecting_since = 0.0
                     conn.connected = False
                     conn.session_status = "disconnected"
                     conn.balance = None
@@ -409,14 +423,15 @@ class PocketOptionSDKAdapter(PocketOptionAdapter):
             await self.reconnect_session(conn)
 
     async def set_session(self, session: str, uid: int) -> bool:
-        self._demo_conn.session = session
-        self._demo_conn.uid = uid
-        self._demo_conn.auth_fail_count = 0
-        self._demo_conn.net_fail_count = 0
-        self._demo_conn.next_attempt_at = 0.0
-        self._demo_conn.session_status = "connecting"
-        self._demo_conn.balance = None
-        return await self.reconnect_session(self._demo_conn)
+        async with self._demo_conn.reconnect_lock:
+            self._demo_conn.session = session
+            self._demo_conn.uid = uid
+            self._demo_conn.auth_fail_count = 0
+            self._demo_conn.net_fail_count = 0
+            self._demo_conn.next_attempt_at = 0.0
+            self._demo_conn.session_status = "connecting"
+            self._demo_conn.balance = None
+            return await self._reconnect_locked(self._demo_conn)
 
     def is_connected(self, account: Literal["demo", "real"] = "demo") -> bool:
         if account == "real":
