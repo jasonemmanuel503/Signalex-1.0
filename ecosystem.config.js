@@ -1,3 +1,4 @@
+// Run npm run setup:python once before pm2 start.
 // SIGNALEX — PM2 Production Config
 // Usage:
 //   npm run build              (build Next.js first — one time)
@@ -28,7 +29,7 @@ module.exports = {
       name:          "signalex-python",
       cwd:           "./python-backend",
       script:        "main.py",
-      interpreter:   "python3",
+      interpreter:   "./venv/bin/python",
       watch:         false,
       autorestart:   true,
       max_restarts:  10,

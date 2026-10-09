@@ -24,6 +24,7 @@ env/
 **/venv/
 **/.venv/
 .pytest_cache/
+.cache/
 po-gateway/.env
 .env.*
 !.env.example

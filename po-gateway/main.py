@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import sys
 import time
 import random
 import asyncio
@@ -124,6 +125,17 @@ async def track_and_update_deal(deal_id: str, expiry_secs: int):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global kill_switch_engaged
+    if not USE_FAKE_ADAPTER:
+        try:
+            import importlib.metadata
+            import pocket_option
+            installed_sdk_ver = importlib.metadata.version("pocket-option")
+            logger.info(f"Running with interpreter: {sys.executable} (pocket-option v{installed_sdk_ver})")
+        except ImportError:
+            raise RuntimeError(
+                f"pocket-option is not installed in this interpreter ({sys.executable}). Run: npm run setup:python"
+            )
+
     await storage.init_db()
     ad = get_adapter()
     await ad.connect()
@@ -172,12 +184,21 @@ async def get_health(x_internal_token: Optional[str] = Header(None)):
     age = max(0.0, now - last_msg) if last_msg > 0 else 999999.0
     accounts = await ad.get_accounts_status()
 
+    sdk_version = None
+    if not USE_FAKE_ADAPTER:
+        try:
+            import importlib.metadata
+            sdk_version = importlib.metadata.version("pocket-option")
+        except Exception:
+            sdk_version = None
+
     return {
         "status": "ok",
         "connected": ad.is_connected("demo"),
         "session": ad.get_session_status("demo"),
         "last_message_age_secs": round(age, 2),
         "version": "0.4.0",
+        "sdk_version": sdk_version,
         "adapter": "fake" if USE_FAKE_ADAPTER else "sdk",
         "kill_active": kill_switch_engaged,
         "accounts": accounts,

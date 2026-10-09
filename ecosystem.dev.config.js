@@ -1,3 +1,4 @@
+// Run npm run setup:python once before pm2 start.
 // SIGNALEX — PM2 Development Config
 // Usage:
 //   pm2 start ecosystem.dev.config.js
@@ -31,7 +32,7 @@ module.exports = {
       name:          "signalex-python-dev",
       cwd:           "./python-backend",
       script:        "main.py",
-      interpreter:   "python3",
+      interpreter:   "./venv/bin/python",
       // PM2 watches main.py and auto-restarts Python when you save changes
       watch:         ["main.py"],
       ignore_watch:  ["__pycache__", "*.pyc", ".env"],

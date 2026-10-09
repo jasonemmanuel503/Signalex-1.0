@@ -1,14 +1,16 @@
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
 const rootDir = path.resolve(__dirname, '..');
 const pythonBackendDir = path.resolve(rootDir, 'python-backend');
 const poGatewayDir = path.resolve(rootDir, 'po-gateway');
+const backendVenvPython = path.resolve(pythonBackendDir, 'venv/bin/python');
 const poVenvPython = path.resolve(poGatewayDir, 'venv/bin/python');
 
 let isTerminating = false;
 const activeProcesses = [];
+const processCrashStats = {};
 
 // Clean up any stray processes on 8001 and 8002 before starting
 function terminateStrayListeners(ports) {
@@ -33,45 +35,12 @@ function terminateStrayListeners(ports) {
 
 terminateStrayListeners([8001, 8002]);
 
-// 1. Ensure Python dependencies for python-backend are installed if missing
+// 1. Run reproducible Python environment bootstrapper
+const setupScript = path.resolve(__dirname, 'setup-python.js');
 try {
-  execSync('python3 -c "import fastapi, uvicorn, httpx, pydantic, websockets"', { stdio: 'ignore' });
-} catch {
-  console.log('[start-all] python-backend dependencies missing, installing...');
-  try {
-    execSync('pip3 install --break-system-packages -r python-backend/requirements.txt aiosqlite', {
-      cwd: rootDir,
-      stdio: 'inherit',
-    });
-  } catch (err) {
-    console.error('[start-all] Warning: pip install encountered an issue:', err.message);
-  }
-}
-
-// 2. Ensure po-gateway venv with Python 3.13 and pocket-option is set up
-let poVenvValid = false;
-if (fs.existsSync(poVenvPython)) {
-  try {
-    execSync(`"${poVenvPython}" -c "import pocket_option"`, { stdio: 'ignore' });
-    poVenvValid = true;
-  } catch {
-    poVenvValid = false;
-  }
-}
-
-if (!poVenvValid) {
-  console.log('[start-all] po-gateway venv or pocket_option missing, setting up...');
-  try {
-    execSync('which uv || pip3 install --break-system-packages uv', { stdio: 'inherit' });
-    execSync(`uv venv "${path.resolve(poGatewayDir, 'venv')}" --python 3.13`, { cwd: rootDir, stdio: 'inherit' });
-    execSync(`uv pip install --python "${poVenvPython}" -r "${path.resolve(poGatewayDir, 'requirements.txt')}"`, {
-      cwd: rootDir,
-      stdio: 'inherit',
-    });
-    console.log('[start-all] po-gateway venv successfully initialized with Python 3.13.');
-  } catch (err) {
-    console.error('[start-all] Error setting up po-gateway venv:', err.message);
-  }
+  execFileSync(process.execPath, [setupScript], { stdio: 'inherit' });
+} catch (err) {
+  console.error('[start-all] Warning: setup-python.js exited with an error.');
 }
 
 function launchProcess(name, command, args, cwd, customEnv = {}) {
@@ -80,6 +49,11 @@ function launchProcess(name, command, args, cwd, customEnv = {}) {
     PYTHONUNBUFFERED: '1',
     ...customEnv,
   };
+
+  if (!processCrashStats[name]) {
+    processCrashStats[name] = { quickExitCount: 0, launchTime: Date.now() };
+  }
+  processCrashStats[name].launchTime = Date.now();
 
   console.log(`[start-all] Launching ${name}...`);
   const proc = spawn(command, args, {
@@ -91,10 +65,23 @@ function launchProcess(name, command, args, cwd, customEnv = {}) {
   activeProcesses.push({ name, proc });
 
   proc.on('exit', (code, signal) => {
+    const elapsedMs = Date.now() - (processCrashStats[name]?.launchTime || 0);
+    if (elapsedMs > 60000) {
+      processCrashStats[name].quickExitCount = 0;
+    }
+    if (elapsedMs < 10000) {
+      processCrashStats[name].quickExitCount += 1;
+    }
+
     const exitMsg = `${new Date().toISOString()} [start-all] ${name} exited with code ${code} (signal: ${signal})\n`;
     console.log(`[start-all] ${name} exited with code ${code} (signal: ${signal})`);
     try { fs.appendFileSync(path.resolve(rootDir, 'data/launcher.log'), exitMsg); } catch {}
+
     if (!isTerminating && name !== 'Next.js') {
+      if (processCrashStats[name].quickExitCount >= 5) {
+        console.error(`[start-all] ERROR: ${name} exited quickly 5 times in a row. Stopping auto-restart (last exit code: ${code}).`);
+        return;
+      }
       const restartMsg = `${new Date().toISOString()} [start-all] Auto-restarting ${name} in 2 seconds...\n`;
       console.log(`[start-all] Auto-restarting ${name} in 2 seconds...`);
       try { fs.appendFileSync(path.resolve(rootDir, 'data/launcher.log'), restartMsg); } catch {}
@@ -109,39 +96,48 @@ function launchProcess(name, command, args, cwd, customEnv = {}) {
   return proc;
 }
 
-// 3. Launch Python Market Data Backend (Deriv / Closed Candles) on port 8001
-launchProcess(
-  'python-backend',
-  'python3',
-  ['main.py'],
-  pythonBackendDir,
-  {
-    PYTHON_BACKEND_PORT: process.env.PYTHON_BACKEND_PORT || '8001',
-    INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || 'dev_internal_token_signalex_2026',
-  }
-);
+// 2. Launch Python Market Data Backend (Deriv / Closed Candles) on port 8001
+if (fs.existsSync(backendVenvPython)) {
+  launchProcess(
+    'python-backend',
+    backendVenvPython,
+    ['main.py'],
+    pythonBackendDir,
+    {
+      PYTHON_BACKEND_PORT: process.env.PYTHON_BACKEND_PORT || '8001',
+      INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || 'dev_internal_token_signalex_2026',
+    }
+  );
+} else {
+  console.error('[start-all] python-backend NOT started: venv interpreter missing. Fix: npm run setup:python');
+}
 
-// 4. Launch Pocket Option Gateway on port 8002 using venv interpreter
-const poInterpreter = fs.existsSync(poVenvPython) ? poVenvPython : 'python3';
-launchProcess(
-  'po-gateway',
-  poInterpreter,
-  ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8002'],
-  poGatewayDir,
-  {
-    PO_USE_FAKE_ADAPTER: process.env.PO_USE_FAKE_ADAPTER || 'false',
-    INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || 'dev_internal_token_signalex_2026',
-  }
-);
+// 3. Launch Pocket Option Gateway on port 8002 using venv interpreter
+if (fs.existsSync(poVenvPython)) {
+  launchProcess(
+    'po-gateway',
+    poVenvPython,
+    ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8002'],
+    poGatewayDir,
+    {
+      PO_USE_FAKE_ADAPTER: process.env.PO_USE_FAKE_ADAPTER || 'false',
+      INTERNAL_API_TOKEN: process.env.INTERNAL_API_TOKEN || 'dev_internal_token_signalex_2026',
+    }
+  );
+} else {
+  console.error('[start-all] po-gateway NOT started: venv interpreter missing. Fix: npm run setup:python');
+}
 
 // 4. Launch Next.js dev server on port 3000
 const isProd = process.env.NODE_ENV === 'production';
-const nextCommand = isProd ? ['next', 'start', '-p', '3000', '-H', '0.0.0.0'] : ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'];
+const localNextBin = path.resolve(rootDir, 'node_modules/.bin/next');
+const nextExecutable = fs.existsSync(localNextBin) ? localNextBin : 'next';
+const nextArgs = isProd ? ['start', '-p', '3000', '-H', '0.0.0.0'] : ['dev', '-p', '3000', '-H', '0.0.0.0'];
 
 const nextProc = launchProcess(
   'Next.js',
-  'npx',
-  nextCommand,
+  nextExecutable,
+  nextArgs,
   rootDir
 );
 

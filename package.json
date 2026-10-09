@@ -6,7 +6,10 @@
     "dev": "node scripts/start-all.js",
     "build": "cross-env NODE_ENV=production next build",
     "start": "node scripts/start-all.js",
-    "lint": "next lint"
+    "lint": "next lint",
+    "setup:python": "node scripts/setup-python.js",
+    "check:python": "node scripts/setup-python.js --check",
+    "setup:python:dev": "node scripts/setup-python.js --dev"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
