@@ -13,7 +13,7 @@ export async function GET(req) {
 
     // Check PO Gateway health & balance
     let gateway = { connected: false, session: "unknown", last_message_age_secs: null };
-    let balance = { demo: 10000.0, real: 0.0, current: 10000.0 };
+    let balance = { demo: null, real: null, current: null };
     try {
       const res = await fetch(`${PO_GATEWAY_URL}/health`, {
         headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
@@ -26,23 +26,31 @@ export async function GET(req) {
       gateway = { connected: false, session: "unreachable", last_message_age_secs: null };
     }
 
-    if (gateway.connected) {
-      try {
-        const balRes = await fetch(`${PO_GATEWAY_URL}/balance?account=${state.account || "demo"}`, {
-          headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
-          signal: AbortSignal.timeout(2000),
-        });
-        if (balRes.ok) {
-          const balData = await balRes.json();
-          balance.current = Number(balData.balance ?? 10000.0);
-          if (state.account === "real") {
-            balance.real = balance.current;
-          } else {
-            balance.demo = balance.current;
+    if (gateway.connected && gateway.session === "valid") {
+      if (gateway.balance != null && Number.isFinite(Number(gateway.balance)) && (state.account || "demo") === "demo") {
+        balance.demo = Number(gateway.balance);
+        balance.current = balance.demo;
+      } else {
+        try {
+          const balRes = await fetch(`${PO_GATEWAY_URL}/balance?account=${state.account || "demo"}`, {
+            headers: { "X-Internal-Token": INTERNAL_API_TOKEN },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (balRes.ok) {
+            const balData = await balRes.json();
+            if (balData.balance != null && Number.isFinite(Number(balData.balance))) {
+              const numBal = Number(balData.balance);
+              balance.current = numBal;
+              if (state.account === "real") {
+                balance.real = numBal;
+              } else {
+                balance.demo = numBal;
+              }
+            }
           }
+        } catch {
+          // Leave null
         }
-      } catch {
-        // Fall back to stored/default balance
       }
     }
 

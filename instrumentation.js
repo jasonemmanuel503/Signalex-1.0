@@ -30,5 +30,17 @@ export async function register() {
         );
       }
     }
+
+    // Start background Pocket Option session monitor (singleton guard)
+    const g = globalThis;
+    if (!g.__signalexSessionMonitorStarted) {
+      g.__signalexSessionMonitorStarted = true;
+      try {
+        const { startSessionMonitor } = await import("./lib/sessionMonitor.js");
+        startSessionMonitor();
+      } catch (err) {
+        console.warn("[Instrumentation] Failed to start session monitor:", err.message);
+      }
+    }
   }
 }

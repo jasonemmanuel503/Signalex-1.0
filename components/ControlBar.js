@@ -28,7 +28,7 @@ export default function ControlBar({
   const mode = controlState?.mode || "SIGNALS";
   const account = controlState?.account || "demo";
   const isPaused = Boolean(controlState?.trading_paused);
-  const isSessionExpired = controlState?.gateway?.session === "expired";
+  const isSessionValid = controlState?.gateway?.connected === true && controlState?.gateway?.session === "valid";
   const isGatewayDown = !controlState?.gateway?.connected;
 
   // Clear toast after 5s
@@ -43,13 +43,14 @@ export default function ControlBar({
   const handleSelectMode = async (targetMode) => {
     if (targetMode === mode) return;
 
-    // Guard: Can't switch to SEMI/AUTO if paused or session expired
+    // Guard: Can't switch to SEMI/AUTO if paused or session is not valid
     if ((targetMode === "SEMI" || targetMode === "AUTO") && isPaused) {
       setErrorToast("Cannot enable SEMI or AUTO while trading is paused. Resume trading first.");
       return;
     }
-    if ((targetMode === "SEMI" || targetMode === "AUTO") && isSessionExpired) {
-      setErrorToast("Cannot enable SEMI or AUTO while Pocket Option session is expired.");
+    if ((targetMode === "SEMI" || targetMode === "AUTO") && !isSessionValid) {
+      const stateLabel = controlState?.gateway?.session || (isGatewayDown ? "disconnected" : "unreachable");
+      setErrorToast(`Cannot enable SEMI or AUTO while Pocket Option session is ${stateLabel}.`);
       return;
     }
 
@@ -151,19 +152,25 @@ export default function ControlBar({
     : "PO: OK";
   const poStateClass = isGatewayDown ? styles.chipError : controlState?.gateway?.last_message_age_secs > 60 ? styles.chipWarning : styles.chipSuccess;
 
-  const sessionStateText = controlState?.gateway?.session === "valid"
-    ? "SESSION: VALID"
-    : controlState?.gateway?.session === "expired"
-    ? "SESSION: EXPIRED"
-    : "SESSION: UNKNOWN";
-  const sessionStateClass = controlState?.gateway?.session === "valid" ? styles.chipSuccess : styles.chipError;
+  const sessionStatus = controlState?.gateway?.session || (isGatewayDown ? "disconnected" : "unknown");
+  const sessionStateText = `SESSION: ${sessionStatus.toUpperCase()}`;
+  const sessionStateClass =
+    sessionStatus === "valid"
+      ? styles.chipSuccess
+      : sessionStatus === "connecting"
+      ? styles.chipWarning
+      : styles.chipError;
 
   const derivStateText = controlState?.deriv?.connected ? "DERIV: OK" : "DERIV: DOWN";
   const derivStateClass = controlState?.deriv?.connected ? styles.chipSuccess : styles.chipError;
 
-  const balanceValue = account === "real"
-    ? (controlState?.balance?.real ?? 0)
-    : (controlState?.balance?.demo ?? 10000);
+  const rawBalance = account === "real"
+    ? controlState?.balance?.real
+    : controlState?.balance?.demo;
+  const hasValidBalance = rawBalance != null && Number.isFinite(Number(rawBalance));
+  const balanceDisplay = hasValidBalance
+    ? `$${Number(rawBalance).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : "NO DATA";
 
   const profitVal = controlState?.today?.netProfit ?? 0;
   const profitStr = `${profitVal >= 0 ? "+" : ""}$${profitVal.toFixed(2)}`;
@@ -225,7 +232,8 @@ export default function ControlBar({
           {["OFF", "SIGNALS", "SEMI", "AUTO"].map((m) => {
             const isActive = mode === m;
             const activeClass = isActive ? styles[`modeBtnActive${m}`] : "";
-            const isDisabled = loadingMode || ((m === "SEMI" || m === "AUTO") && (isPaused || isSessionExpired));
+            const stateLabel = controlState?.gateway?.session || (isGatewayDown ? "disconnected" : "unreachable");
+            const isDisabled = loadingMode || ((m === "SEMI" || m === "AUTO") && (isPaused || !isSessionValid));
             return (
               <button
                 key={m}
@@ -235,8 +243,8 @@ export default function ControlBar({
                 title={
                   (m === "SEMI" || m === "AUTO") && isPaused
                     ? "Disabled while trading is paused"
-                    : (m === "SEMI" || m === "AUTO") && isSessionExpired
-                    ? "Disabled while session is expired"
+                    : (m === "SEMI" || m === "AUTO") && !isSessionValid
+                    ? `Disabled while session is ${stateLabel}`
                     : `Set mode to ${m}`
                 }
               >
@@ -294,7 +302,7 @@ export default function ControlBar({
           {derivStateText}
         </div>
         <div className={`${styles.chip} ${styles.chipHighlight} ${account === "real" ? styles.chipError : styles.chipAccent}`}>
-          💰 ${Number(balanceValue).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          💰 {balanceDisplay}
         </div>
         <div className={`${styles.chip} ${profitClass}`}>
           TODAY: {profitStr}
@@ -323,7 +331,7 @@ export default function ControlBar({
             <div className={styles.modalBody}>
               <p>You are about to switch to the <strong>REAL Pocket Option account</strong>.</p>
               <div style={{ background: "rgba(0,0,0,0.3)", padding: "10px", borderRadius: "6px", margin: "10px 0" }}>
-                <div>💵 <strong>Real Balance:</strong> ${Number(controlState?.balance?.real ?? 0).toFixed(2)}</div>
+                <div>💵 <strong>Real Balance:</strong> {controlState?.balance?.real != null && Number.isFinite(Number(controlState.balance.real)) ? `$${Number(controlState.balance.real).toFixed(2)}` : "NO DATA"}</div>
                 <div>🛑 <strong>Loss Streak Limit:</strong> {controlState?.settings?.loss_streak_limit ?? 3} losses</div>
                 <div>🛡️ <strong>Max Stake Cap:</strong> ${controlState?.settings?.max_stake ?? 25.00}</div>
                 <div>📊 <strong>Daily Loss Limit:</strong> ${controlState?.settings?.daily_loss_limit ?? 100.00}</div>

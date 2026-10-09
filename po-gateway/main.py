@@ -5,6 +5,8 @@ import time
 import random
 import asyncio
 import logging
+import hashlib
+import json
 from typing import Literal, Optional, List
 from contextlib import asynccontextmanager
 
@@ -70,13 +72,72 @@ storage = LocalStorage(data_dir=DATA_DIR)
 adapter: Optional[PocketOptionAdapter] = None
 kill_switch_engaged = False
 
+
+def compute_env_fingerprint(session: str, uid: int) -> str:
+    payload = f"{session}|{uid}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def get_session_file_path() -> str:
+    return os.path.join(DATA_DIR, "session.json")
+
+
+def load_effective_credentials() -> tuple[str, int]:
+    sess_path = get_session_file_path()
+    env_fp = compute_env_fingerprint(PO_SESSION, PO_UID)
+
+    if os.path.exists(sess_path):
+        try:
+            with open(sess_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_fp = data.get("env_fingerprint")
+            saved_sess = data.get("session")
+            saved_uid = data.get("uid")
+            if saved_fp == env_fp and saved_sess and saved_uid:
+                logger.info("Using runtime session credentials from session.json (env fingerprint matched).")
+                return str(saved_sess), int(saved_uid)
+            else:
+                logger.info("Environment credentials changed or fingerprint mismatch. Env credentials take precedence over session.json.")
+        except Exception as e:
+            logger.warning(f"Failed to read session.json: {e}")
+
+    return PO_SESSION, PO_UID
+
+
+def persist_session_credentials(session: str, uid: int) -> None:
+    sess_path = get_session_file_path()
+    os.makedirs(os.path.dirname(os.path.abspath(sess_path)), exist_ok=True)
+    env_fp = compute_env_fingerprint(PO_SESSION, PO_UID)
+    data = {
+        "session": session,
+        "uid": uid,
+        "env_fingerprint": env_fp,
+        "saved_at": time.time(),
+    }
+    tmp_path = f"{sess_path}.tmp.{os.getpid()}"
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, sess_path)
+        os.chmod(sess_path, 0o600)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 def get_adapter() -> PocketOptionAdapter:
     global adapter
     if adapter is None:
+        effective_session, effective_uid = load_effective_credentials()
         has_real_config = bool(
             PO_REAL_SESSION and PO_REAL_SESSION.strip() and
             PO_REAL_UID and
-            (PO_REAL_SESSION != PO_SESSION or PO_REAL_UID != PO_UID)
+            (PO_REAL_SESSION != effective_session or PO_REAL_UID != effective_uid)
         )
         if USE_FAKE_ADAPTER:
             logger.info("Initializing FakePocketOptionAdapter for deterministic testing.")
@@ -86,8 +147,8 @@ def get_adapter() -> PocketOptionAdapter:
         else:
             logger.info("Initializing PocketOptionSDKAdapter with real pocket-option SDK.")
             adapter = PocketOptionSDKAdapter(
-                session=PO_SESSION,
-                uid=PO_UID,
+                session=effective_session,
+                uid=effective_uid,
                 real_session=PO_REAL_SESSION if has_real_config else None,
                 real_uid=PO_REAL_UID if has_real_config else None,
                 region_name=PO_REGION,
@@ -150,7 +211,31 @@ async def lifespan(app: FastAPI):
             logger.info(f"Reconciling pending open order on startup: deal {deal_id}")
             asyncio.create_task(track_and_update_deal(deal_id, expiry))
 
+    watchdog_task = None
+    async def watchdog_runner():
+        while True:
+            try:
+                await asyncio.sleep(5)
+                ad = get_adapter()
+                if hasattr(ad, "check_watchdog"):
+                    await ad.check_watchdog()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Watchdog tick exception: {e}")
+
+    watchdog_task = asyncio.create_task(watchdog_runner())
+
     yield
+
+    if watchdog_task:
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
 
     logger.info("Shutting down po-gateway...")
     if adapter:
@@ -192,16 +277,71 @@ async def get_health(x_internal_token: Optional[str] = Header(None)):
         except Exception:
             sdk_version = None
 
+    is_conn = ad.is_connected("demo")
+    sess_status = ad.get_session_status("demo")
+    demo_bal = await ad.get_balance("demo") if (is_conn and sess_status == "valid") else None
+
     return {
         "status": "ok",
-        "connected": ad.is_connected("demo"),
-        "session": ad.get_session_status("demo"),
+        "connected": is_conn,
+        "session": sess_status,
+        "balance": demo_bal,
         "last_message_age_secs": round(age, 2),
         "version": "0.4.0",
         "sdk_version": sdk_version,
         "adapter": "fake" if USE_FAKE_ADAPTER else "sdk",
         "kill_active": kill_switch_engaged,
         "accounts": accounts,
+    }
+
+# ── Session Management Endpoint ──────────────────────────────────────────────
+class UpdateSessionRequest(BaseModel):
+    session: str = Field(..., min_length=8, max_length=4096)
+    uid: int = Field(..., gt=0)
+
+@app.post("/session")
+async def update_session(
+    req: UpdateSessionRequest,
+    x_internal_token: Optional[str] = Header(None)
+):
+    verify_internal_token(x_internal_token)
+    cleaned_session = req.session.strip()
+    if len(cleaned_session) < 8 or len(cleaned_session) > 4096:
+        raise HTTPException(status_code=400, detail="Invalid session length (must be 8-4096 chars)")
+
+    logger.info(f"Received runtime credential update: uid={len(str(req.uid))} digits, session={len(cleaned_session)} chars")
+
+    ad = get_adapter()
+    success = await ad.set_session(cleaned_session, req.uid)
+
+    current_status = ad.get_session_status("demo")
+    is_connected = ad.is_connected("demo")
+
+    if success and current_status == "valid":
+        try:
+            persist_session_credentials(cleaned_session, req.uid)
+            logger.info("Successfully authenticated and persisted runtime session credentials.")
+        except Exception as e:
+            logger.warning(f"Failed to persist valid credentials: {e}")
+
+    return {
+        "ok": (current_status == "valid"),
+        "status": current_status,
+        "connected": is_connected,
+    }
+
+# ── Balance Endpoint ─────────────────────────────────────────────────────────
+@app.get("/balance")
+async def get_balance(
+    account: Literal["demo", "real"] = "demo",
+    x_internal_token: Optional[str] = Header(None)
+):
+    verify_internal_token(x_internal_token)
+    ad = get_adapter()
+    bal = await ad.get_balance(account)
+    return {
+        "account": account,
+        "balance": bal,
     }
 
 # ── Assets Endpoint ──────────────────────────────────────────────────────────

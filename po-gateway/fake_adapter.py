@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import os
 import time
 import math
 import random
@@ -33,15 +34,25 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
         real_configured: bool = False,
     ):
         self._demo_connected = False
-        self._demo_session_status: Literal["valid", "expired", "unknown"] = "unknown"
+        self._demo_session_status: Literal["missing", "connecting", "valid", "disconnected", "expired", "unknown"] = "unknown"
         self._demo_last_message_at = 0.0
-        self._demo_balance = demo_balance
+        self._demo_balance: Optional[float] = demo_balance
+        self._initial_demo_balance = demo_balance
 
         self._real_configured = real_configured
         self._real_connected = False
-        self._real_session_status: Literal["valid", "expired", "unknown"] = "unknown"
+        self._real_session_status: Literal["missing", "connecting", "valid", "disconnected", "expired", "unknown"] = "unknown"
         self._real_last_message_at = 0.0
-        self._real_balance = real_balance
+        self._real_balance: Optional[float] = real_balance
+
+        # Simulation & watchdog state
+        self._network_down = False
+        self._auth_reject_mode = False
+        self._auth_fail_count = 0
+        self._net_fail_count = 0
+        self._next_attempt_at = 0.0
+        self._generation = 0
+        self.disconnect_call_count = 0
 
         self._subscribed_pairs: set[str] = set()
         self._assets: Dict[str, AssetMetadata] = {}
@@ -115,27 +126,127 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
             self._candles[pair] = candles
 
     async def connect(self) -> None:
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.01)
+        if self._network_down:
+            self._demo_connected = False
+            self._demo_session_status = "disconnected"
+            self._demo_balance = None
+            return
+
+        if self._auth_reject_mode:
+            self._demo_connected = True
+            self._demo_session_status = "connecting"
+            self._demo_balance = None
+            return
+
         self._demo_connected = True
         self._demo_session_status = "valid"
+        self._demo_balance = self._initial_demo_balance
         self._demo_last_message_at = time.time()
+        self._auth_fail_count = 0
+        self._net_fail_count = 0
         if self._real_configured:
             self._real_connected = True
             self._real_session_status = "valid"
             self._real_last_message_at = time.time()
 
     async def disconnect(self) -> None:
+        self.disconnect_call_count += 1
         self._demo_connected = False
-        self._demo_session_status = "unknown"
+        self._demo_session_status = "disconnected" if self._demo_session_status != "expired" else "expired"
+        self._demo_balance = None
         self._real_connected = False
-        self._real_session_status = "unknown"
+        self._real_session_status = "disconnected" if self._real_session_status != "expired" else "expired"
+        self._real_balance = None
+
+    def simulate_disconnect(self) -> None:
+        self._demo_connected = False
+        self._demo_session_status = "disconnected"
+        self._demo_balance = None
+
+    def simulate_network_down(self) -> None:
+        self._network_down = True
+        self._demo_connected = False
+        self._demo_session_status = "disconnected"
+        self._demo_balance = None
+
+    def simulate_network_up(self) -> None:
+        self._network_down = False
+        self._demo_connected = True
+        self._demo_session_status = "valid"
+        self._demo_balance = self._initial_demo_balance
+        self._demo_last_message_at = time.time()
+        self._auth_fail_count = 0
+        self._net_fail_count = 0
+
+    def simulate_auth_reject(self, enabled: bool = True) -> None:
+        self._auth_reject_mode = enabled
+        if enabled:
+            self._demo_session_status = "connecting"
+
+    async def check_watchdog(self) -> None:
+        backoff_base = float(os.getenv("PO_BACKOFF_BASE", "10"))
+        backoff_max = float(os.getenv("PO_BACKOFF_MAX", "60"))
+        auth_fail_limit = int(os.getenv("PO_AUTH_FAIL_LIMIT", "3"))
+
+        if self._demo_session_status in ("expired", "missing"):
+            return
+
+        now = time.time()
+        if now < self._next_attempt_at:
+            return
+
+        if self._network_down:
+            self._net_fail_count += 1
+            n = self._net_fail_count + self._auth_fail_count
+            backoff = min(backoff_base * (2 ** max(0, n - 1)), backoff_max)
+            self._next_attempt_at = now + backoff
+            self._demo_connected = False
+            self._demo_session_status = "disconnected"
+            self._demo_balance = None
+            return
+
+        if self._auth_reject_mode:
+            self._auth_fail_count += 1
+            n = self._net_fail_count + self._auth_fail_count
+            backoff = min(backoff_base * (2 ** max(0, n - 1)), backoff_max)
+            self._next_attempt_at = now + backoff
+
+            if self._auth_fail_count >= auth_fail_limit:
+                self._demo_session_status = "expired"
+                self._demo_connected = False
+                self._demo_balance = None
+                await self.disconnect()
+            else:
+                self._demo_connected = False
+                self._demo_session_status = "disconnected"
+                self._demo_balance = None
+            return
+
+        if not self._demo_connected or self._demo_session_status != "valid":
+            await self.connect()
+
+    async def set_session(self, session: str, uid: int) -> bool:
+        if self._auth_reject_mode:
+            self._auth_fail_count += 1
+            self._demo_connected = False
+            self._demo_session_status = "disconnected"
+            self._demo_balance = None
+            return False
+
+        self._demo_connected = True
+        self._demo_session_status = "valid"
+        self._demo_balance = self._initial_demo_balance
+        self._auth_fail_count = 0
+        self._net_fail_count = 0
+        return True
 
     def is_connected(self, account: Literal["demo", "real"] = "demo") -> bool:
         if account == "real":
             return bool(self._real_configured and self._real_connected)
         return self._demo_connected
 
-    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["valid", "expired", "unknown"]:
+    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["missing", "connecting", "valid", "disconnected", "expired", "unknown"]:
         if account == "real":
             return self._real_session_status if self._real_configured else "unknown"
         return self._demo_session_status
@@ -200,18 +311,22 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
         self._demo_last_message_at = time.time()
         return list(self._assets.values())
 
-    async def get_balance(self, account: Literal["demo", "real"]) -> float:
+    async def get_balance(self, account: Literal["demo", "real"]) -> Optional[float]:
         if account == "real":
             if not self._real_configured:
                 raise RuntimeError("Real account is not configured")
+            if not self._real_connected or self._real_session_status != "valid" or self._real_balance is None:
+                return None
             return float(self._real_balance)
+        if not self._demo_connected or self._demo_session_status != "valid" or self._demo_balance is None:
+            return None
         return float(self._demo_balance)
 
     async def get_accounts_status(self) -> dict:
         demo_status = {
             "connected": bool(self._demo_connected),
             "session": self._demo_session_status,
-            "balance": float(self._demo_balance),
+            "balance": float(self._demo_balance) if (self._demo_balance is not None and self._demo_connected and self._demo_session_status == "valid") else None,
         }
         if not self._real_configured:
             real_status = {"status": "not_configured"}
@@ -219,7 +334,7 @@ class FakePocketOptionAdapter(PocketOptionAdapter):
             real_status = {
                 "connected": bool(self._real_connected),
                 "session": self._real_session_status,
-                "balance": float(self._real_balance),
+                "balance": float(self._real_balance) if (self._real_balance is not None and self._real_connected and self._real_session_status == "valid") else None,
             }
         return {
             "demo": demo_status,

@@ -32,6 +32,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import styles from "./Dashboard.module.css";
 import PauseBanner from "./PauseBanner.js";
+import SessionReconnectBanner from "./SessionReconnectBanner.js";
 import ControlBar from "./ControlBar.js";
 import PendingTradeCard from "./PendingTradeCard.js";
 import TradesTable from "./TradesTable.js";
@@ -1047,6 +1048,11 @@ export default function Dashboard() {
                 }}
               />
             )}
+
+            <SessionReconnectBanner
+              gateway={controlState?.gateway}
+              onReconnected={fetchControl}
+            />
 
             {/* Control Bar (Mode Buttons, Account Switcher, Kill Switch, Status Chips) */}
             <ControlBar

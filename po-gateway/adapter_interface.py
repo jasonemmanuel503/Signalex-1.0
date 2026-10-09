@@ -62,9 +62,17 @@ class PocketOptionAdapter(ABC):
         pass
 
     @abstractmethod
-    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["valid", "expired", "unknown"]:
+    def get_session_status(self, account: Literal["demo", "real"] = "demo") -> Literal["missing", "connecting", "valid", "disconnected", "expired", "unknown"]:
         """Return session authentication status for given account."""
         pass
+
+    async def check_watchdog(self) -> None:
+        """Watchdog tick for connection health and automatic reconnects."""
+        pass
+
+    async def set_session(self, session: str, uid: int) -> bool:
+        """Update credentials at runtime and reconnect."""
+        return True
 
     @abstractmethod
     def get_last_message_at(self, account: Literal["demo", "real"] = "demo") -> float:
