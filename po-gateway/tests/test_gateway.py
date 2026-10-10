@@ -573,11 +573,20 @@ async def test_auth_reject_single_count_on_watchdog(monkeypatch):
     await tap("NotAuthorized")
     assert conn.auth_fail_count == 1
 
+    reconnect_calls = []
+
+    async def fake_reconnect(c):
+        reconnect_calls.append(c.name)
+        return False
+
+    monkeypatch.setattr(adapter, "reconnect_session", fake_reconnect)
+
     # Run check_watchdog while socket is still "connected"
     monkeypatch.setenv("PO_AUTH_TIMEOUT", "5")
     await adapter.check_watchdog()
 
-    # Must still be exactly 1, not 2
+    # Must still be exactly 1, not 2, and fake_reconnect must have been called
     assert conn.auth_fail_count == 1, f"Expected 1 auth failure, got {conn.auth_fail_count}"
+    assert reconnect_calls == ["demo"], f"Expected fake_reconnect to be called once for 'demo', got {reconnect_calls}"
 
 
